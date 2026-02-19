@@ -277,7 +277,7 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
 
     return {
         graphElements: [...nodes, ...edges],
-        timelineEvents: transactions.map(tx => {
+        timelineEvents: await Promise.all(transactions.map(async tx => {
             // Risk Classification:
             // - critical: Large amounts (>50k) - likely money laundering
             // - high: Threshold dodging pattern (9000-9999 to avoid 10k reporting)
@@ -287,6 +287,41 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
             if (tx.amount > 50000) riskLevel = 'critical';
             else if (tx.amount >= 9000 && tx.amount <= 9999) riskLevel = 'high';
             else if (tx.amount >= 5000) riskLevel = 'medium';
+
+            // Extract raw IPv4 from composite string like "1.2.3.4 (v6: ...) [Local: ...]"
+            const rawIp = (tx.ip_address || '').split(' ')[0].split('[')[0].trim();
+
+            // Real-time IP intelligence lookup
+            let ipCity = 'Unknown';
+            let ispName = 'Unknown';
+            let isVpnTransaction = false;
+
+            if (rawIp && rawIp !== '0.0.0.0') {
+                try {
+                    const ipData = await getRealIpLocation(rawIp);
+                    if (ipData) {
+                        ipCity = ipData.city;
+                        ispName = ipData.isp;
+                        // Check ISP for known VPN/Hosting providers
+                        const ispLower = ispName.toLowerCase();
+                        if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('datacenter') || ispLower.includes('proxy') || ispLower.includes('private')) {
+                            isVpnTransaction = true;
+                        }
+                        // Check Geo-Mismatch if location available
+                        if (tx.location && tx.location !== 'Unknown' && tx.location !== 'Unknown (Permission Denied)') {
+                            const parts = tx.location.split(',').map((c: string) => parseFloat(c.trim()));
+                            if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                                const dist = calculateHaversineDistance(parts[0], parts[1], ipData.lat, ipData.lon);
+                                if (dist > 500 && ipData.city !== 'Private Network') {
+                                    isVpnTransaction = true;
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // Silently fail for individual lookups
+                }
+            }
 
             return {
                 id: tx.id,
@@ -304,10 +339,15 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                         ? tx.ip_address.split('.').slice(0, 3).join('.') + '.0'
                         : 'Unknown',
                     imei: tx.device_id || 'Unknown Hardware ID',
-                    device: tx.device_name || 'Web Browser'
+                    device: tx.device_name || 'Web Browser',
+                    // New enriched fields
+                    isVpn: isVpnTransaction,
+                    isp: ispName,
+                    ipCity: ipCity,
+                    macAddress: tx.device_id ? `MAC-${tx.device_id.slice(0, 2)}:${tx.device_id.slice(2, 4)}:${tx.device_id.slice(4, 6)}:${tx.device_id.slice(6, 8)}:FF:FE` : 'N/A'
                 }
             };
-        }),
+        })),
         alerts,
         stats: {
             totalTransactions: transactions.length,

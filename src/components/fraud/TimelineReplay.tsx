@@ -177,12 +177,29 @@ export function TimelineReplay({ events, onEventSelect }: TimelineReplayProps) {
                                     <div className="text-xs text-slate-300 font-mono">{currentEvent.details.subnet}</div>
                                 </div>
                                 <div>
+                                    <label className="text-[10px] uppercase text-slate-500 block mb-0.5">ISP / Provider</label>
+                                    <div className={`text-xs font-mono ${(currentEvent.details as any).isVpn ? 'text-orange-400' : 'text-slate-300'}`}>{(currentEvent.details as any).isp || 'Unknown'}</div>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] uppercase text-slate-500 block mb-0.5">IP City</label>
+                                    <div className="text-xs text-slate-300">{(currentEvent.details as any).ipCity || 'Unknown'}</div>
+                                </div>
+                                {(currentEvent.details as any).isVpn && (
+                                    <div className="col-span-2 bg-orange-950/20 border border-orange-800/50 rounded p-2 text-center">
+                                        <span className="text-[10px] text-orange-400 font-bold uppercase">🛡️ VPN / Proxy Detected</span>
+                                    </div>
+                                )}
+                                <div>
                                     <label className="text-[10px] uppercase text-slate-500 block mb-0.5">Platform Detail</label>
                                     <div className="text-xs text-slate-300">{currentEvent.details.device}</div>
                                 </div>
                                 <div>
                                     <label className="text-[10px] uppercase text-slate-500 block mb-0.5">Hardware ID</label>
                                     <div className="text-xs text-purple-400 font-mono">{currentEvent.details.imei}</div>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] uppercase text-slate-500 block mb-0.5">MAC Address</label>
+                                    <div className="text-xs text-emerald-400 font-mono">{(currentEvent.details as any).macAddress || 'N/A'}</div>
                                 </div>
                                 <div>
                                     <label className="text-[10px] uppercase text-slate-500 block mb-0.5">Location</label>

@@ -130,6 +130,42 @@ export default function TransactionsPage() {
                                             </div>
                                         </div>
 
+                                        {/* VPN Status */}
+                                        {selectedTx.details?.isVpn && (
+                                            <div className="bg-orange-950/20 border border-orange-800/50 rounded-lg p-3 animate-pulse">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-lg">🛡️</span>
+                                                    <div>
+                                                        <div className="text-[10px] text-orange-400 uppercase font-bold">VPN / Proxy Detected</div>
+                                                        <div className="text-[10px] text-orange-300/70">Network appears to be routed through a proxy or VPN service</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* ISP Info */}
+                                        <div className="flex items-start gap-3">
+                                            <div className="p-2 bg-slate-900 rounded-lg text-slate-400">
+                                                <Globe className="w-4 h-4" />
+                                            </div>
+                                            <div>
+                                                <div className="text-[10px] text-slate-500 uppercase font-bold">ISP / Network Provider</div>
+                                                <div className={`text-sm font-mono ${selectedTx.details?.isVpn ? 'text-orange-400' : 'text-slate-200'}`}>{selectedTx.details?.isp || 'Unknown'}</div>
+                                                <div className="text-[10px] text-slate-600">IP City: {selectedTx.details?.ipCity || 'Unknown'}</div>
+                                            </div>
+                                        </div>
+
+                                        {/* MAC Address */}
+                                        <div className="flex items-start gap-3">
+                                            <div className="p-2 bg-slate-900 rounded-lg text-slate-400">
+                                                <Hash className="w-4 h-4" />
+                                            </div>
+                                            <div>
+                                                <div className="text-[10px] text-slate-500 uppercase font-bold">MAC Address</div>
+                                                <div className="text-sm font-mono text-emerald-400">{selectedTx.details?.macAddress || 'N/A'}</div>
+                                            </div>
+                                        </div>
+
                                         <div className="flex items-start gap-3">
                                             <div className="p-2 bg-slate-900 rounded-lg text-slate-400">
                                                 <Smartphone className="w-4 h-4" />
