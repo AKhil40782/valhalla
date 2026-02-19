@@ -130,7 +130,7 @@ export default function AttackSimulator() {
             const txBatchSize = 500;
             let txCount = 0;
 
-            const createTx = (from: string, to: string, amount: number) => {
+            const createTx = (from: string, to: string, amount: number, isVpn: boolean = false) => {
                 allTxs.push({
                     id: uuidv4(),
                     from_account_id: from,
@@ -139,9 +139,12 @@ export default function AttackSimulator() {
                     amount,
                     timestamp: new Date().toISOString(),
                     transaction_type: 'transfer',
-                    location: 'SIMULATION_GRID',
+                    location: isVpn ? 'DATACENTER_PROXY' : 'SIMULATION_GRID',
                     device_id: 'SIM_DEV_' + from.substring(0, 8),
-                    ip_address: '10.0.0.1'
+                    ip_address: isVpn
+                        ? `185.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`
+                        : `192.168.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
+                    vpn_flag: isVpn
                 });
             };
 
@@ -157,7 +160,8 @@ export default function AttackSimulator() {
                 // Determine if this mule sends to hacker
                 if (Math.random() > 0.2 && idMap.Hacker.length > 0) {
                     const targetHacker = idMap.Hacker[Math.floor(Math.random() * idMap.Hacker.length)];
-                    createTx(muleId, targetHacker, 40000 + Math.random() * 30000);
+                    // High probability of VPN for money laundering step
+                    createTx(muleId, targetHacker, 40000 + Math.random() * 30000, Math.random() > 0.3);
                 }
             }
 
