@@ -52,40 +52,47 @@ interface MapTransaction {
     ipLon: number | null;
 }
 
-// Clickable VPN button that flies map to VPN IP location
-function VpnFlyButton({ ipLat, ipLon, ipCity }: { ipLat: number; ipLon: number; ipCity: string }) {
+// Reusable fly button for VPN navigation (works both directions)
+function MapFlyButton({ targetLat, targetLon, label, color = '#a855f7' }: { targetLat: number; targetLon: number; label: string; color?: string }) {
     const map = useMap();
     const handleClick = (e: React.MouseEvent) => {
         e.stopPropagation();
         map.closePopup();
-        map.flyTo([ipLat, ipLon], 10, { duration: 2 });
+        map.flyTo([targetLat, targetLon], 10, { duration: 2 });
     };
     return (
         <div
             onClick={handleClick}
             style={{
-                color: '#a855f7',
+                color: color,
                 fontSize: '10px',
                 fontWeight: 'bold',
                 cursor: 'pointer',
                 padding: '4px 8px',
                 marginTop: '2px',
-                background: 'rgba(168, 85, 247, 0.1)',
-                border: '1px solid rgba(168, 85, 247, 0.3)',
+                background: `${color}1a`,
+                border: `1px solid ${color}4d`,
                 borderRadius: '6px',
                 textAlign: 'center',
                 transition: 'all 0.2s',
             }}
             onMouseEnter={(e) => {
-                (e.target as HTMLElement).style.background = 'rgba(168, 85, 247, 0.25)';
+                (e.target as HTMLElement).style.background = `${color}40`;
             }}
             onMouseLeave={(e) => {
-                (e.target as HTMLElement).style.background = 'rgba(168, 85, 247, 0.1)';
+                (e.target as HTMLElement).style.background = `${color}1a`;
             }}
         >
-            🛡️ VPN DETECTED — Click to fly to {ipCity} ✈️
+            {label}
         </div>
     );
+}
+
+// Client-side VPN detection helper (fallback when vpn_flag not set in DB)
+function isVpnTx(tx: MapTransaction): boolean {
+    if (tx.isVpn) return true;
+    const ispLower = (tx.isp || '').toLowerCase();
+    return ispLower.includes('zenex') || ispLower.includes('5ive') || ispLower.includes('vpn') || ispLower.includes('proxy') || ispLower.includes('hosting') || ispLower.includes('cloud') || ispLower.includes('datacenter') || ispLower.includes('digitalocean') || tx.ip.startsWith('45.90') || tx.ip.startsWith('45.33') || tx.ip.startsWith('185.');
 }
 
 interface LiveMapProps {
@@ -135,7 +142,7 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                         from: [a.lat, a.lon],
                         to: [b.lat, b.lon],
                         risk: a.riskLevel === 'critical' || b.riskLevel === 'critical' ? 'critical' : a.riskLevel,
-                        isVpn: a.isVpn || b.isVpn
+                        isVpn: isVpnTx(a) || isVpnTx(b)
                     });
                 }
             }
@@ -156,7 +163,7 @@ export default function LiveMap({ transactions }: LiveMapProps) {
     };
 
     const getMarkerIcon = (txs: MapTransaction[]) => {
-        const hasVpn = txs.some(t => t.isVpn);
+        const hasVpn = txs.some(t => isVpnTx(t));
         if (hasVpn) return ICONS.vpn;
         const maxRisk = txs.reduce((max, t) => {
             const order = { critical: 4, high: 3, medium: 2, low: 1 };
@@ -233,32 +240,37 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                                 <div style={{ borderTop: '1px solid #334155', paddingTop: '6px' }}>
                                     <strong style={{ color: '#e2e8f0' }}>{loc.txs.length} Transaction{loc.txs.length > 1 ? 's' : ''}</strong>
                                 </div>
-                                {loc.txs.slice(0, 5).map((tx, i) => (
-                                    <div key={i} style={{
-                                        borderTop: '1px solid #1e293b',
-                                        paddingTop: '4px',
-                                        marginTop: '4px',
-                                        color: '#cbd5e1'
-                                    }}>
-                                        <div>
-                                            <span style={{ color: tx.riskLevel === 'critical' ? '#ef4444' : tx.riskLevel === 'high' ? '#f97316' : '#22d3ee' }}>
-                                                ₹{tx.amount.toLocaleString()}
-                                            </span>
-                                            {' '}{tx.from} → {tx.to}
-                                        </div>
-                                        <div style={{ color: '#64748b', fontSize: '10px' }}>
-                                            IP: {tx.ip} | ISP: {tx.isp}
-                                        </div>
-                                        {tx.isVpn && tx.ipLat && tx.ipLon && (
-                                            <VpnFlyButton ipLat={tx.ipLat} ipLon={tx.ipLon} ipCity={tx.ipCity} />
-                                        )}
-                                        {tx.isVpn && (!tx.ipLat || !tx.ipLon) && (
-                                            <div style={{ color: '#a855f7', fontSize: '10px', fontWeight: 'bold' }}>
-                                                🛡️ VPN DETECTED
+                                {loc.txs.slice(0, 5).map((tx, i) => {
+                                    // Client-side VPN detection fallback
+                                    const ispLower = (tx.isp || '').toLowerCase();
+                                    const effectiveVpn = tx.isVpn || ispLower.includes('zenex') || ispLower.includes('5ive') || ispLower.includes('vpn') || ispLower.includes('proxy') || ispLower.includes('hosting') || ispLower.includes('cloud') || ispLower.includes('datacenter') || ispLower.includes('digitalocean') || tx.ip.startsWith('45.90') || tx.ip.startsWith('45.33') || tx.ip.startsWith('185.');
+                                    return (
+                                        <div key={i} style={{
+                                            borderTop: '1px solid #1e293b',
+                                            paddingTop: '4px',
+                                            marginTop: '4px',
+                                            color: '#cbd5e1'
+                                        }}>
+                                            <div>
+                                                <span style={{ color: tx.riskLevel === 'critical' ? '#ef4444' : tx.riskLevel === 'high' ? '#f97316' : '#22d3ee' }}>
+                                                    ₹{tx.amount.toLocaleString()}
+                                                </span>
+                                                {' '}{tx.from} → {tx.to}
                                             </div>
-                                        )}
-                                    </div>
-                                ))}
+                                            <div style={{ color: '#64748b', fontSize: '10px' }}>
+                                                IP: {tx.ip} | ISP: {tx.isp}
+                                            </div>
+                                            {effectiveVpn && tx.ipLat && tx.ipLon && (
+                                                <MapFlyButton targetLat={tx.ipLat} targetLon={tx.ipLon} label={`🛡️ VPN DETECTED — Fly to ${tx.ipCity || 'VPN Exit'} ✈️`} />
+                                            )}
+                                            {effectiveVpn && (!tx.ipLat || !tx.ipLon) && (
+                                                <div style={{ color: '#a855f7', fontSize: '10px', fontWeight: 'bold', padding: '2px 6px', marginTop: '2px', background: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: '6px', textAlign: 'center' }}>
+                                                    🛡️ VPN / PROXY DETECTED
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
                                 {loc.txs.length > 5 && (
                                     <div style={{ color: '#64748b', marginTop: '4px' }}>
                                         +{loc.txs.length - 5} more...
@@ -270,7 +282,7 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                 ))}
 
                 {/* VPN Ghost Markers — where VPN IPs actually resolve to */}
-                {transactions.filter(tx => tx.isVpn && tx.ipLat && tx.ipLon).map((tx, idx) => (
+                {transactions.filter(tx => isVpnTx(tx) && tx.ipLat && tx.ipLon).map((tx, idx) => (
                     <CircleMarker
                         key={`vpn-ghost-${idx}`}
                         center={[tx.ipLat!, tx.ipLon!]}
@@ -283,7 +295,7 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                         }}
                         radius={20}
                     >
-                        <Popup maxWidth={250}>
+                        <Popup maxWidth={280}>
                             <div style={{ fontFamily: 'monospace', fontSize: '11px' }}>
                                 <div style={{ color: '#a855f7', fontWeight: 'bold', marginBottom: '4px' }}>
                                     🛡️ VPN Exit Point: {tx.ipCity}
@@ -294,13 +306,16 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                                 <div style={{ color: '#64748b', fontSize: '10px', marginTop: '4px' }}>
                                     Real user location: {tx.lat.toFixed(4)}, {tx.lon.toFixed(4)}
                                 </div>
+                                <div style={{ marginTop: '6px' }}>
+                                    <MapFlyButton targetLat={tx.lat} targetLon={tx.lon} label={`🔙 Fly Back to Real Location ✈️`} color='#22d3ee' />
+                                </div>
                             </div>
                         </Popup>
                     </CircleMarker>
                 ))}
 
                 {/* Dashed lines from real location to VPN exit point */}
-                {transactions.filter(tx => tx.isVpn && tx.ipLat && tx.ipLon).map((tx, idx) => (
+                {transactions.filter(tx => isVpnTx(tx) && tx.ipLat && tx.ipLon).map((tx, idx) => (
                     <Polyline
                         key={`vpn-trace-${idx}`}
                         positions={[[tx.lat, tx.lon], [tx.ipLat!, tx.ipLon!]]}
@@ -352,7 +367,7 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                     <span className="text-slate-500">Transactions</span>
                     <span className="text-cyan-400 font-bold text-right">{transactions.length}</span>
                     <span className="text-slate-500">VPN Hits</span>
-                    <span className="text-purple-400 font-bold text-right">{transactions.filter(t => t.isVpn).length}</span>
+                    <span className="text-purple-400 font-bold text-right">{transactions.filter(t => isVpnTx(t)).length}</span>
                     <span className="text-slate-500">Flows</span>
                     <span className="text-cyan-400 font-bold text-right">{flowLines.length}</span>
                 </div>

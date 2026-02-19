@@ -179,9 +179,9 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
     const uniqueIpsToResolve = new Set<string>();
 
     transactions.forEach(tx => {
-        // Collect IPs for batch resolution
+        // Collect IPs for batch resolution (always resolve to get lat/lon for VPN fly-to)
         const rawIp = (tx.ip_address || '').split(' ')[0].split('[')[0].trim();
-        if (rawIp && rawIp !== '0.0.0.0' && (!tx.asn || tx.asn === 'Unknown ISP')) {
+        if (rawIp && rawIp !== '0.0.0.0') {
             uniqueIpsToResolve.add(rawIp);
         }
 
@@ -264,9 +264,19 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
 
                 if (!isVpn && userIps) {
                     userIps.forEach(ip => {
-                        // 185.x is our sim VPN, 45.33 is Linode (often VPN), 10.0 is legacy sim
-                        if (ip.startsWith('45.33') || ip.startsWith('185.') || ip.startsWith('10.0')) isVpn = true;
+                        // 185.x is our sim VPN, 45.33/45.90 is Linode/Zenex (often VPN), 10.0 is legacy sim
+                        if (ip.startsWith('45.33') || ip.startsWith('45.90') || ip.startsWith('185.') || ip.startsWith('10.0')) isVpn = true;
                     });
+                }
+
+                // Also check ASN/ISP name from any of their transactions
+                if (!isVpn) {
+                    const vpnKeywords = ['vpn', 'cloud', 'hosting', 'proxy', 'zenex', '5ive', 'digitalocean', 'datacenter'];
+                    const hasVpnIsp = accountTxsMap.get(accId)?.some(tx => {
+                        const asnLower = (tx.asn || '').toLowerCase();
+                        return vpnKeywords.some(kw => asnLower.includes(kw));
+                    }) || false;
+                    if (hasVpnIsp) isVpn = true;
                 }
 
                 const cluster = accountClusterMap.get(accId);
@@ -420,24 +430,41 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
             } else {
                 ipCity = tx.location?.split(' ')[0] || 'Unknown';
             }
+
+            // VPN Detection ALSO for DB-stored ASN
+            const ispLower = ispName.toLowerCase();
+            const isKnownVpnIp = rawIp.startsWith('45.33') || rawIp.startsWith('45.90') || rawIp.startsWith('185.') || rawIp.startsWith('10.0');
+            const isVpnIsp = ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy') || ispLower.includes('zenex') || ispLower.includes('digitalocean') || ispLower.includes('5ive') || ispLower.includes('datacenter');
+            if (isKnownVpnIp || isVpnIsp) {
+                isVpnTransaction = true;
+            }
         } else {
-            // Use pre-fetched cache
+            // Use pre-fetched cache for ISP name
             if (ipCache.has(rawIp)) {
                 const data = ipCache.get(rawIp);
-                ipCity = data.city || 'Unknown City';
+                if (ipCity === 'Unknown') ipCity = data.city || 'Unknown City';
                 ispName = data.isp || 'Unknown ISP';
-                ipLat = data.lat;
-                ipLon = data.lon;
 
-                // Enhanced VPN Detection for Map
                 const ispLower = ispName.toLowerCase();
-                const isKnownVpnIp = rawIp.startsWith('45.33') || rawIp.startsWith('185.') || rawIp.startsWith('10.0');
-                const isVpnIsp = ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy') || ispLower.includes('zenex') || ispLower.includes('digitalocean');
-
+                const isKnownVpnIp = rawIp.startsWith('45.33') || rawIp.startsWith('45.90') || rawIp.startsWith('185.') || rawIp.startsWith('10.0');
+                const isVpnIsp = ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy') || ispLower.includes('zenex') || ispLower.includes('digitalocean') || ispLower.includes('5ive') || ispLower.includes('datacenter');
                 if (isKnownVpnIp || isVpnIsp) {
                     isVpnTransaction = true;
                 }
             }
+        }
+
+        // Use DB-stored IP geolocation (reliable, no external API needed at read time)
+        if (tx.ip_lat && tx.ip_lon) {
+            ipLat = tx.ip_lat;
+            ipLon = tx.ip_lon;
+            if (tx.ip_city && ipCity === 'Unknown') ipCity = tx.ip_city;
+        } else if (ipCache.has(rawIp)) {
+            // Fallback to IP cache if DB columns not populated
+            const cached = ipCache.get(rawIp);
+            ipLat = cached.lat;
+            ipLon = cached.lon;
+            if (ipCity === 'Unknown') ipCity = cached.city || 'Unknown City';
         }
 
         return {
@@ -764,13 +791,25 @@ export async function processUserTransaction(data: {
         let vpnFlag = false;
         let finalLocation = data.forensics.location;
 
+        let ipLat: number | null = null;
+        let ipLon: number | null = null;
+        let ipCityResolved: string | null = null;
+
         try {
             if (data.forensics.ip && data.forensics.ip !== '0.0.0.0') {
                 const ipData = await getRealIpLocation(data.forensics.ip);
                 if (ipData) {
                     asn = ipData.isp || 'Unknown ISP';
+                    ipLat = ipData.lat;
+                    ipLon = ipData.lon;
+                    ipCityResolved = ipData.city || null;
                     const ispLower = asn.toLowerCase();
-                    if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('datacenter') || ispLower.includes('proxy')) {
+                    if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('datacenter') || ispLower.includes('proxy') || ispLower.includes('zenex') || ispLower.includes('5ive') || ispLower.includes('digitalocean')) {
+                        vpnFlag = true;
+                    }
+                    // Also check IP range
+                    const ipStr = data.forensics.ip;
+                    if (ipStr.startsWith('45.33') || ipStr.startsWith('45.90') || ipStr.startsWith('185.') || ipStr.startsWith('10.0')) {
                         vpnFlag = true;
                     }
                     // Fallback location if GPS denied
@@ -795,6 +834,9 @@ export async function processUserTransaction(data: {
             // Store intelligence to avoid re-fetching on read
             asn: asn,
             vpn_flag: vpnFlag,
+            ip_lat: ipLat,
+            ip_lon: ipLon,
+            ip_city: ipCityResolved,
             device_fingerprint_id: data.forensics.deviceId ? `fp_${data.forensics.deviceId.substring(0, 12)}` : null,
             metadata: data.forensics // 🚀 Save full forensics (OS, Browser, Screen, Timezone)
         });

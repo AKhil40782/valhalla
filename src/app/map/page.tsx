@@ -66,7 +66,7 @@ export default function MapPage() {
     const { data: fraudData, loading: fraudLoading, refresh } = useFraudData();
     const [transactions, setTransactions] = useState<MapTransaction[]>([]);
     const [processing, setProcessing] = useState(false);
-    const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+    const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
     const loading = fraudLoading || processing;
 
@@ -143,7 +143,7 @@ export default function MapPage() {
                 </div>
                 <div className="flex items-center gap-4">
                     <span className="text-[10px] text-slate-500 font-mono">
-                        Last Sync: {lastRefresh.toLocaleTimeString()}
+                        Last Sync: {lastRefresh ? lastRefresh.toLocaleTimeString() : '—'}
                     </span>
                     <button
                         onClick={handleRefresh}
