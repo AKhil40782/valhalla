@@ -177,7 +177,7 @@ export default function MapPage() {
                     <CardTitle className="flex items-center gap-2 text-lg">
                         <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
                         Live Network Map
-                        <span className="text-[10px] text-slate-500 font-normal ml-auto">OpenStreetMap | Leaflet</span>
+                        <span className="text-[10px] text-slate-500 font-normal ml-auto">Google Maps</span>
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="p-0">
