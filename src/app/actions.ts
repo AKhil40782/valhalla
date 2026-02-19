@@ -929,26 +929,31 @@ async function getRealIpLocation(ip: string): Promise<{ lat: number, lon: number
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1500); // 1.5s timeout
+        const timeoutId = setTimeout(() => controller.abort(), 3000); // Increased to 3s
 
-        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,lat,lon,city,isp`, {
-            signal: controller.signal
-        });
-        clearTimeout(timeoutId);
+        try {
+            const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,lat,lon,city,isp`, {
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            const data = await response.json();
 
-        const data = await response.json();
-
-        if (data.status === 'success') {
-            return {
-                lat: data.lat,
-                lon: data.lon,
-                city: data.city,
-                isp: data.isp
-            };
+            if (data.status === 'success') {
+                return { lat: data.lat, lon: data.lon, city: data.city, isp: data.isp };
+            }
+        } catch (err) {
+            // Fallback to ipwho.is if ip-api fails
+            // console.log("Falling back to ipwho.is");
+            try {
+                const fbResponse = await fetch(`http://ipwho.is/${ip}`);
+                const fbData = await fbResponse.json();
+                if (fbData.success) {
+                    return { lat: fbData.latitude, lon: fbData.longitude, city: fbData.city, isp: fbData.connection?.isp || fbData.isp };
+                }
+            } catch (e2) { /* ignore */ }
         }
         return null;
     } catch (e) {
-        // console.warn("IP Geolocation Fetch Failed/Timed Out:", e);
         return null;
     }
 }
