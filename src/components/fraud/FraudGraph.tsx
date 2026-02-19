@@ -408,7 +408,7 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
             {/* Selected Node Panel */}
             {/* Selected Node Panel */}
             {selectedNode && (
-                <div className="absolute bottom-3 right-3 z-10 bg-slate-900/95 backdrop-blur p-4 rounded-lg border border-cyan-800 text-xs min-w-[280px] shadow-2xl animate-in slide-in-from-bottom-5">
+                <div className="absolute bottom-3 right-3 z-10 bg-slate-900/95 backdrop-blur p-4 rounded-lg border border-cyan-800 text-xs min-w-[300px] max-w-[340px] max-h-[85vh] overflow-y-auto shadow-2xl animate-in slide-in-from-bottom-5">
                     <div className="font-bold text-cyan-400 mb-2 flex items-center gap-2 border-b border-cyan-900/50 pb-2">
                         <span>Selected Entity Details</span>
                         <button
@@ -419,39 +419,124 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                         </button>
                     </div>
                     <div className="space-y-3 text-slate-300">
-                        {/* Metrics Breakdown */}
+
+                        {/* Cluster Badge */}
+                        {selectedNode.clusterLabel && (
+                            <div className={`flex items-center gap-2 px-2 py-1.5 rounded border ${selectedNode.clusterRiskLevel === 'high' ? 'bg-red-950/30 border-red-800 text-red-400' :
+                                    selectedNode.clusterRiskLevel === 'medium' ? 'bg-amber-950/30 border-amber-800 text-amber-400' :
+                                        'bg-slate-800/50 border-slate-700 text-slate-400'
+                                }`}>
+                                <span className="text-lg">🔗</span>
+                                <div>
+                                    <div className="font-bold text-[10px] uppercase tracking-wider">{selectedNode.clusterLabel}</div>
+                                    <div className="text-[9px] opacity-80">
+                                        Risk Level: <span className="font-bold uppercase">{selectedNode.clusterRiskLevel}</span>
+                                        {selectedNode.metrics?.engineRiskScore && ` (${selectedNode.metrics.engineRiskScore}%)`}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Engine Metrics Breakdown */}
                         {selectedNode.metrics && (
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-2 py-2 border-y border-slate-800/50 my-2">
+                            <div className="space-y-2 py-2 border-y border-slate-800/50 my-2">
+                                <div className="text-[9px] text-slate-500 uppercase tracking-wider font-bold mb-1">Identity Linking Scores</div>
+
+                                {/* Fingerprint Reuse */}
                                 <div>
-                                    <span className="text-slate-500 block text-[9px] uppercase">Device Reuse</span>
-                                    <span className={selectedNode.metrics.deviceReuse > 1 ? 'text-red-400 font-bold' : 'text-slate-300'}>
-                                        {selectedNode.metrics.deviceReuse} Users
-                                    </span>
+                                    <div className="flex justify-between mb-0.5">
+                                        <span className="text-slate-400 text-[9px]">🔑 Fingerprint Reuse</span>
+                                        <span className={`font-bold ${parseInt(selectedNode.metrics.fingerprintReuse) > 50 ? 'text-red-400' : 'text-slate-300'}`}>
+                                            {selectedNode.metrics.fingerprintReuse}%
+                                        </span>
+                                    </div>
+                                    <div className="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
+                                        <div className="h-full bg-red-500 rounded-full transition-all" style={{ width: `${selectedNode.metrics.fingerprintReuse}%` }} />
+                                    </div>
                                 </div>
+
+                                {/* Time Sync */}
                                 <div>
-                                    <span className="text-slate-500 block text-[9px] uppercase">IP Reuse</span>
-                                    <span className={selectedNode.metrics.ipReuse > 1 ? 'text-orange-400 font-bold' : 'text-slate-300'}>
-                                        {selectedNode.metrics.ipReuse} Users
-                                    </span>
+                                    <div className="flex justify-between mb-0.5">
+                                        <span className="text-slate-400 text-[9px]">⏱️ Time Synchronization</span>
+                                        <span className={`font-bold ${parseInt(selectedNode.metrics.timeSyncEngine) > 50 ? 'text-red-400' : 'text-slate-300'}`}>
+                                            {selectedNode.metrics.timeSyncEngine}%
+                                        </span>
+                                    </div>
+                                    <div className="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
+                                        <div className="h-full bg-orange-500 rounded-full transition-all" style={{ width: `${selectedNode.metrics.timeSyncEngine}%` }} />
+                                    </div>
                                 </div>
+
+                                {/* Network Reuse */}
                                 <div>
-                                    <span className="text-slate-500 block text-[9px] uppercase">Sync Score</span>
-                                    <span className={selectedNode.metrics.syncScore > 50 ? 'text-red-400 font-bold' : 'text-slate-300'}>
-                                        {selectedNode.metrics.syncScore}%
-                                    </span>
+                                    <div className="flex justify-between mb-0.5">
+                                        <span className="text-slate-400 text-[9px]">🌐 IP/Subnet/ASN Reuse</span>
+                                        <span className={`font-bold ${parseInt(selectedNode.metrics.networkReuse) > 50 ? 'text-orange-400' : 'text-slate-300'}`}>
+                                            {selectedNode.metrics.networkReuse}%
+                                        </span>
+                                    </div>
+                                    <div className="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
+                                        <div className="h-full bg-amber-500 rounded-full transition-all" style={{ width: `${selectedNode.metrics.networkReuse}%` }} />
+                                    </div>
                                 </div>
+
+                                {/* Graph Density */}
                                 <div>
-                                    <span className="text-slate-500 block text-[9px] uppercase">Node Degree</span>
-                                    <span className="text-cyan-400 font-bold">{selectedNode.metrics.degree} Links</span>
+                                    <div className="flex justify-between mb-0.5">
+                                        <span className="text-slate-400 text-[9px]">📊 Graph Density</span>
+                                        <span className="text-slate-300 font-bold">{selectedNode.metrics.graphDensityEngine}%</span>
+                                    </div>
+                                    <div className="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
+                                        <div className="h-full bg-cyan-500 rounded-full transition-all" style={{ width: `${selectedNode.metrics.graphDensityEngine}%` }} />
+                                    </div>
                                 </div>
-                                {selectedNode.metrics.burst && (
+
+                                {/* VPN Presence */}
+                                <div>
+                                    <div className="flex justify-between mb-0.5">
+                                        <span className="text-slate-400 text-[9px]">🛡️ VPN Presence</span>
+                                        <span className={`font-bold ${parseInt(selectedNode.metrics.vpnPresence) > 0 ? 'text-orange-400' : 'text-slate-300'}`}>
+                                            {selectedNode.metrics.vpnPresence}%
+                                        </span>
+                                    </div>
+                                    <div className="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
+                                        <div className="h-full bg-violet-500 rounded-full transition-all" style={{ width: `${selectedNode.metrics.vpnPresence}%` }} />
+                                    </div>
+                                </div>
+
+                                {/* Legacy Metrics Row */}
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 pt-2 border-t border-slate-800/50">
+                                    <div>
+                                        <span className="text-slate-500 block text-[9px] uppercase">Device Reuse</span>
+                                        <span className={selectedNode.metrics.deviceReuse > 1 ? 'text-red-400 font-bold' : 'text-slate-300'}>
+                                            {selectedNode.metrics.deviceReuse} Users
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="text-slate-500 block text-[9px] uppercase">IP Reuse</span>
+                                        <span className={selectedNode.metrics.ipReuse > 1 ? 'text-orange-400 font-bold' : 'text-slate-300'}>
+                                            {selectedNode.metrics.ipReuse} Users
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="text-slate-500 block text-[9px] uppercase">Node Degree</span>
+                                        <span className="text-cyan-400 font-bold">{selectedNode.metrics.degree} Links</span>
+                                    </div>
+                                    <div>
+                                        <span className="text-slate-500 block text-[9px] uppercase">Engine Risk</span>
+                                        <span className="text-cyan-400 font-bold">{selectedNode.metrics.engineRiskScore}%</span>
+                                    </div>
+                                </div>
+
+                                {selectedNode.metrics.burstMode && (
                                     <div className="col-span-2">
                                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-950/30 border border-red-900/50 text-red-500 text-[9px] font-bold uppercase">
                                             🔥 Burst Activity Detected
                                         </span>
                                     </div>
                                 )}
-                                {selectedNode.metrics.threshold && (
+                                {selectedNode.metrics.thresholdDodging && (
                                     <div className="col-span-2">
                                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-950/30 border border-amber-900/50 text-amber-500 text-[9px] font-bold uppercase">
                                             ⚠️ Threshold Avoidance (9k-10k)
@@ -473,7 +558,7 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                         {selectedNode.risk !== undefined && (
                             <div className="bg-slate-800/50 p-2 rounded border border-slate-700">
                                 <div className="flex items-center justify-between mb-2">
-                                    <span className="text-slate-400">Risk Assessment</span>
+                                    <span className="text-slate-400">Composite Risk Score</span>
                                     {getRiskBadge(selectedNode.risk)}
                                 </div>
                                 <div className="h-1.5 w-full bg-slate-700 rounded-full overflow-hidden mb-2">
@@ -483,17 +568,27 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                                     ></div>
                                 </div>
 
+                                {/* Engine Explainability */}
+                                {selectedNode.clusterExplanation && (
+                                    <div className="text-[11px] leading-relaxed text-slate-300 mt-3 border-t border-slate-700/50 pt-2">
+                                        <strong className="text-cyan-400 block mb-1 flex items-center gap-1">
+                                            <span className="text-lg">🧠</span> Engine Analysis
+                                        </strong>
+                                        <p className="text-slate-400 leading-relaxed">{selectedNode.clusterExplanation}</p>
+                                    </div>
+                                )}
+
                                 {/* Dynamic Detective Narrative */}
                                 <div className="text-[11px] leading-relaxed text-slate-300 mt-3 border-t border-slate-700/50 pt-2">
                                     <strong className="text-cyan-400 block mb-1 flex items-center gap-1">
-                                        <span className="text-lg">🕵️‍♂️</span> Investigator's Note
+                                        <span className="text-lg">🕵️‍♂️</span> Investigator&apos;s Note
                                     </strong>
 
                                     {selectedNode.risk > 80 ? (
                                         <p>
                                             <strong>{selectedNode.label}</strong> is acting as a <strong className="text-red-400">High-Velocity Hub</strong>.
                                             This account is the <strong>common destination</strong> for funds from multiple unrelated sources.
-                                            The graph shows a "Fan-In" pattern typical of <strong className="text-red-400">Money Laundering</strong>.
+                                            The graph shows a &quot;Fan-In&quot; pattern typical of <strong className="text-red-400">Money Laundering</strong>.
                                         </p>
                                     ) : selectedNode.risk > 50 ? (
                                         <p>

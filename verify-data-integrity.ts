@@ -28,11 +28,11 @@ async function checkData() {
 
     console.log(`Fetched ${accounts?.length} accounts and ${profiles?.length} profiles.`);
 
-    const profileIds = new Set(profiles?.map(p => p.id));
+    const profileIds = new Set(profiles?.map((p: any) => p.id));
 
     let missingProfiles = 0;
     if (accounts) {
-        accounts.forEach(acc => {
+        accounts.forEach((acc: any) => {
             if (!profileIds.has(acc.user_id)) {
                 console.log(`Account ${acc.account_number} (ID: ${acc.id}) has user_id ${acc.user_id} which is NOT in profiles.`);
                 missingProfiles++;

@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '@/lib/supabase';
 import { sendFraudAlertEmailReal, sendAccountFrozenEmail, sendTestEmail as sendTestEmailInternal } from '@/lib/notifications/email';
 import { sendTestWhatsapp } from '@/lib/notifications/whatsapp';
+import { runFraudEngine, FraudCluster } from '@/lib/fraud/fraud-engine';
 
 // Wrapper for email test function (server actions require async function exports)
 export async function sendTestEmailAction(toEmail: string) {
@@ -107,7 +108,26 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
         return transformed;
     }) || [];
 
-    // 3️⃣ COORDINATION & TEMPORAL ANALYSIS
+    // 3️⃣ FRAUD ENGINE — Multi-Attribute Identity Linking & Cluster Risk
+    // Build account name map for explainability
+    const accountNameMap = new Map<string, string>();
+    for (const [id, acc] of accountMap) {
+        const profile = profileMap.get(acc.user_id);
+        accountNameMap.set(id, profile?.full_name || acc.account_number || id);
+    }
+
+    // Also resolve to_account_ids from tx data
+    transactions.forEach(tx => {
+        if (!accountNameMap.has(tx.to_account_id)) {
+            accountNameMap.set(tx.to_account_id, tx.to_name || tx.to_account_id);
+        }
+    });
+
+    // Run the 9-step fraud engine
+    const engineResult = await runFraudEngine(rawTransactions || [], accountNameMap);
+    const { clusters: fraudClusters, accountRiskMap: engineRiskMap } = engineResult;
+
+    // 3️⃣b COORDINATION & TEMPORAL ANALYSIS (legacy metrics for UI)
     transactions.forEach(tx => {
         const overlaps = transactions.filter(t =>
             t.id !== tx.id &&
@@ -126,58 +146,57 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
     const potentialLinksCount = (accounts?.length || 1) * ((accounts?.length || 1) - 1);
     const graphDensity = potentialLinksCount > 0 ? transactions.length / potentialLinksCount : 0;
 
+    // Build cluster lookup for each account
+    const accountClusterMap = new Map<string, FraudCluster>();
+    for (const cluster of fraudClusters) {
+        for (const accId of cluster.accountIds) {
+            accountClusterMap.set(accId, cluster);
+        }
+    }
+
     transactions.forEach(tx => {
         [tx.from_account_id, tx.to_account_id].forEach(accId => {
             if (!processedNodes.has(accId)) {
-                // Identity Sharing Metrics
+                // Identity Sharing Metrics (for display)
                 let maxDeviceReuse = 0;
                 deviceMap.forEach(users => { if (users.has(accId)) maxDeviceReuse = Math.max(maxDeviceReuse, users.size); });
                 let maxIpReuse = 0;
                 ipMap.forEach(users => { if (users.has(accId)) maxIpReuse = Math.max(maxIpReuse, users.size); });
 
-                // Sync Score
                 const syncValue = timeSyncMap.get(accId) || 0;
                 const normalizedSync = Math.min(1, syncValue / 5);
-
-                // Behavior Spikes
                 const burstMode = (accountTxsMap.get(accId)?.filter(t => (Date.now() - new Date(t.timestamp).getTime()) < 900000).length || 0) >= 5;
                 const thresholdDodging = transactions.some(t => t.from_account_id === accId && t.amount >= 9000 && t.amount <= 9999);
 
-                // 🛑 FINAL WEIGHTED RISK SCORE
-                // Risk = (DeviceReuse*0.2) + (IPReuse*0.15) + (TimeSync*0.25) + (Centrality/FanIn*0.4)
+                // 🛑 ENGINE-DERIVED RISK SCORE (replaces old ad-hoc formula)
+                const engineData = engineRiskMap.get(accId);
                 const inDegree = inDegreeMap.get(accId) || 0;
-                const centralityBonus = Math.min(1, inDegree / 3) * 100; // Max bonus if 3+ senders
 
-                let riskScoreValue = (
-                    (Math.min(maxDeviceReuse, 5) / 5 * 100 * 0.20) +
-                    (Math.min(maxIpReuse, 5) / 5 * 100 * 0.15) +
-                    (normalizedSync * 100 * 0.25) +
-                    (centralityBonus * 0.40)
-                );
+                // Use engine cluster risk score (0-1 → 0-100), with fan-in bonus
+                let finalRiskScore = engineData ? engineData.riskScore * 100 : 0;
 
-                if (burstMode) riskScoreValue += 15;
-                if (thresholdDodging) riskScoreValue += 20;
+                // Boost for fan-in pattern (money mule detection)
+                if (inDegree >= 3) finalRiskScore = Math.max(finalRiskScore, 85);
+                else if (inDegree >= 2) finalRiskScore = Math.max(finalRiskScore, 65);
+                if (burstMode) finalRiskScore = Math.min(100, finalRiskScore + 15);
+                if (thresholdDodging) finalRiskScore = Math.min(100, finalRiskScore + 20);
 
-                // Orchestrator detection: If in-degree is very high, force a high baseline risk
-                if (inDegree >= 3) riskScoreValue = Math.max(riskScoreValue, 85);
-                else if (inDegree >= 2) riskScoreValue = Math.max(riskScoreValue, 65);
-
-                const finalRiskScore = Math.min(100, riskScoreValue);
+                finalRiskScore = Math.min(100, finalRiskScore);
 
                 const label = (accId.startsWith('SAL_') ? accId : profileMap.get(accountMap.get(accId)?.user_id)?.full_name) || accId;
                 const maskedLabel = forceUnmask ? label : (accId.startsWith('SAL_') ? maskAccountNumber(accId) : label);
 
-                // VPN / Proxy Detection (Simulation)
+                // VPN / Proxy Detection
                 const userIps = ipMap.get(accId);
                 let isVpn = false;
                 if (userIps) {
                     userIps.forEach(ip => {
-                        // Check for the "simulated" VPN IP or private ranges often used in these demos
-                        if (ip.startsWith('45.33') || ip.startsWith('192.168') || ip.startsWith('10.0')) {
-                            isVpn = true;
-                        }
+                        if (ip.startsWith('45.33') || ip.startsWith('192.168') || ip.startsWith('10.0')) isVpn = true;
                     });
                 }
+
+                // Get cluster info for this account
+                const cluster = accountClusterMap.get(accId);
 
                 nodes.push({
                     data: {
@@ -187,13 +206,26 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                         isHacker: profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker',
                         isVpn: isVpn,
                         risk: finalRiskScore,
+                        // Engine-derived cluster data
+                        clusterId: cluster?.id || null,
+                        clusterLabel: cluster?.label || null,
+                        clusterRiskLevel: cluster?.riskLevel || engineData?.riskLevel || 'low',
+                        clusterExplanation: cluster?.explanation || null,
+                        clusterMetrics: cluster?.metrics || null,
                         metrics: {
                             deviceReuse: maxDeviceReuse,
                             ipReuse: maxIpReuse,
                             syncScore: (normalizedSync * 100).toFixed(0),
                             degree: (inDegreeMap.get(accId) || 0) + (outDegreeMap.get(accId) || 0),
                             burstMode,
-                            thresholdDodging
+                            thresholdDodging,
+                            // Engine-normalized scores
+                            engineRiskScore: engineData ? (engineData.riskScore * 100).toFixed(0) : '0',
+                            fingerprintReuse: cluster?.metrics?.fingerprintReuseScore ? (cluster.metrics.fingerprintReuseScore * 100).toFixed(0) : '0',
+                            timeSyncEngine: cluster?.metrics?.timeSyncScore ? (cluster.metrics.timeSyncScore * 100).toFixed(0) : '0',
+                            networkReuse: cluster?.metrics?.ipSubnetAsnReuseScore ? (cluster.metrics.ipSubnetAsnReuseScore * 100).toFixed(0) : '0',
+                            graphDensityEngine: cluster?.metrics?.graphDensityScore ? (cluster.metrics.graphDensityScore * 100).toFixed(0) : '0',
+                            vpnPresence: cluster?.metrics?.vpnPresenceScore ? (cluster.metrics.vpnPresenceScore * 100).toFixed(0) : '0',
                         }
                     },
                     classes: `${finalRiskScore > 80 ? 'critical-risk' : finalRiskScore > 50 ? 'high-risk' : finalRiskScore > 30 ? 'medium-risk' : ''} ${profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker' ? 'hacker-node' : ''} ${isVpn ? 'vpn-node' : ''}`.trim()
@@ -369,7 +401,18 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
             inDegree: maxInDegreeVal,
             severity: maxInDegreeVal >= 3 ? 'CRITICAL' : 'MODERATE',
             is_frozen: accountByNumber.get(topHackerNodeId)?.is_frozen || false
-        } : null
+        } : null,
+        // Engine-detected fraud clusters with explainability
+        fraudClusters: fraudClusters.map(c => ({
+            id: c.id,
+            label: c.label,
+            accountIds: c.accountIds,
+            riskScore: (c.riskScore * 100).toFixed(0),
+            riskLevel: c.riskLevel,
+            explanation: c.explanation,
+            metrics: c.metrics,
+            edgeCount: c.links.length,
+        })),
     };
 }
 // ============================================
@@ -682,15 +725,24 @@ export async function createAttackTransaction(data: { sender: string, amount: nu
             '40.7128, -74.0060' // New York
         ];
 
+        // Generate fingerprint from device ID (simulates browser fingerprinting)
+        const fingerprint = data.deviceId ? `fp_${data.deviceId.substring(0, 12)}` : null;
+        // Simulate ASN based on IP
+        const ipAddr = data.isVpn ? '45.33.21.99' : `106.51.22.${Math.floor(Math.random() * 255)}`;
+        const asn = data.isVpn ? 'AS9009-M247' : 'AS55836-Reliance';
+
         const txData = {
             id: txId,
             from_account_id: fromId,
             to_account_number: data.receiver,
             amount: data.amount,
             status: 'completed',
-            ip_address: data.isVpn ? '45.33.21.99' : `106.51.22.${Math.floor(Math.random() * 255)}`,
+            ip_address: ipAddr,
             device_name: data.isVpn ? 'Linux x86_64 | HeadlessBrowser' : 'Win32 | Chrome 120.0',
             device_id: data.deviceId,
+            device_fingerprint_id: fingerprint,
+            asn: asn,
+            vpn_flag: data.isVpn,
             location: data.isVpn ? '6.5244, 3.3792' : locations[Math.floor(Math.random() * 4)],
             timestamp: timestamp
         };
