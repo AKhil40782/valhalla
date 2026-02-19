@@ -169,17 +169,6 @@ export default function LiveMap({ transactions }: LiveMapProps) {
         <div className="w-full h-full relative rounded-xl overflow-hidden border border-slate-800">
             {/* Custom CSS for dark map theme */}
             <style jsx global>{`
-                .leaflet-container {
-                    background: #0f172a !important;
-                }
-                .leaflet-tile-pane {
-                    filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9);
-                }
-                .leaflet-control-zoom a {
-                    background: #1e293b !important;
-                    color: #94a3b8 !important;
-                    border-color: #334155 !important;
-                }
                 .leaflet-popup-content-wrapper {
                     background: #1e293b !important;
                     color: #e2e8f0 !important;
