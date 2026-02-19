@@ -114,9 +114,9 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
 
         const transformed = {
             ...tx,
-            from_name: fromProfile?.full_name || (fromAccount ? 'Unknown User' : 'External / Unknown'),
+            from_name: fromProfile?.full_name || fromAccount?.virtual_name || (fromAccount ? 'Unknown User' : 'External / Unknown'),
             to_account_id: toAccount?.id || cleanToNum, // Use UUID if found, else normalized number
-            to_name: toProfile?.full_name || tx.to_account_number,
+            to_name: toProfile?.full_name || toAccount?.virtual_name || tx.to_account_number,
         };
 
         if (tx.device_id) {
@@ -256,7 +256,7 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                 if (thresholdDodging) finalRiskScore = Math.min(100, finalRiskScore + 20);
                 finalRiskScore = Math.min(100, finalRiskScore);
 
-                const label = (accId.startsWith('SAL_') ? accId : profileMap.get(accountMap.get(accId)?.user_id)?.full_name) || accId;
+                const label = (accId.startsWith('SAL_') ? accId : (profileMap.get(accountMap.get(accId)?.user_id)?.full_name || accountMap.get(accId)?.virtual_name)) || accId;
                 const maskedLabel = forceUnmask ? label : (accId.startsWith('SAL_') ? maskAccountNumber(accId) : label);
 
                 const userIps = ipMap.get(accId);
@@ -300,7 +300,7 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                             anomaly_score: cluster?.anomalyScore || 0
                         }
                     },
-                    classes: `${finalRiskScore > 80 ? 'critical-risk' : finalRiskScore > 50 ? 'high-risk' : finalRiskScore > 30 ? 'medium-risk' : ''} ${profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker' ? 'hacker-node' : ''} ${isVpn ? 'vpn-node' : ''}`.trim()
+                    classes: `${finalRiskScore > 80 ? 'critical-risk' : finalRiskScore > 50 ? 'high-risk' : finalRiskScore > 30 ? 'medium-risk' : ''} ${profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker' || accountMap.get(accId)?.simulation_type === 'Hacker' ? 'hacker-node' : ''} ${isVpn ? 'vpn-node' : ''}`.trim()
                 });
                 processedNodes.add(accId);
             }
@@ -1188,6 +1188,46 @@ export async function resetSimulationData() {
 
     if (accError) console.error("Error resetting accounts:", accError);
 
+    return { success: true };
+}
+
+// ============================================
+// BATCH SIMULATION ACTIONS
+// ============================================
+
+export async function saveAccountsBatch(accounts: any[]) {
+    // 1. Get a valid user ID (simulation owner)
+    // We'll use the first available user or a fallback
+    // In production, this should be a specific 'Simulator' user
+    const { data: users } = await supabase.from('profiles').select('id').limit(1);
+    const ownerId = users?.[0]?.id;
+
+    if (!ownerId) return { success: false, error: "No valid user found to own simulated accounts." };
+
+    const accountsWithUser = accounts.map(acc => ({
+        ...acc,
+        user_id: ownerId, // Link to valid user
+        is_simulated: true
+    }));
+
+    const { error } = await supabase.from('accounts').insert(accountsWithUser);
+
+    if (error) {
+        console.error("Batch Account Insert Error:", error);
+        return { success: false, error: error.message };
+    }
+    return { success: true };
+}
+
+export async function saveTransactionsBatch(transactions: any[]) {
+    console.log(`💾 Saving batch of ${transactions.length} transactions...`);
+
+    const { error } = await supabase.from('transactions').insert(transactions);
+
+    if (error) {
+        console.error("Batch Transaction Insert Error:", error);
+        return { success: false, error: error.message };
+    }
     return { success: true };
 }
 
