@@ -17,7 +17,17 @@ async function checkFrank() {
         .eq('id', frankId)
         .single();
 
-    console.log("Profile:", profile, pError ? `Error: ${pError.message}` : "Found");
+    if (profile) {
+        console.log("Profile Keys:", Object.keys(profile));
+        console.log("Profile Example:", profile);
+    } else {
+        console.log("Profile not found for Frank, fetching any profile...");
+        const { data: anyProfile } = await supabase.from('profiles').select('*').limit(1).single();
+        if (anyProfile) {
+            console.log("Any Profile Keys:", Object.keys(anyProfile));
+            console.log("Any Profile:", anyProfile);
+        }
+    }
 
     const { data: account, error: aError } = await supabase
         .from('accounts')
@@ -28,7 +38,7 @@ async function checkFrank() {
     console.log("Account:", account, aError ? `Error: ${aError.message}` : "Found");
 
     const { data: allAccounts } = await supabase.from('accounts').select('user_id, account_number');
-    console.log("All Accounts User IDs:", allAccounts?.map(a => a.user_id));
+    console.log("All Accounts:", allAccounts?.map(a => `${a.account_number} (${a.user_id})`));
 }
 
 checkFrank();
