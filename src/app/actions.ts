@@ -439,6 +439,34 @@ async function runFraudDetection(data: {
         }
     }
 
+    // CHECK 5: Geo-Location Mismatch (VPN/Proxy Leak)
+    if (data.forensics?.location && data.forensics?.ip) {
+        const ipLoc = getIpMockLocation(data.forensics.ip);
+        if (ipLoc) {
+            // Parse GPS string "lat, lon"
+            const [gpsLat, gpsLon] = data.forensics.location.split(',').map((c: string) => parseFloat(c.trim()));
+            if (!isNaN(gpsLat) && !isNaN(gpsLon)) {
+                const dist = calculateHaversineDistance(gpsLat, gpsLon, ipLoc.lat, ipLoc.lon);
+                // If distance > 200km and not a private IP, flag it
+                if (dist > 200 && ipLoc.city !== 'Private Network') {
+                    riskLevel = 'CRITICAL';
+                    alertType = 'CRITICAL';
+                    detectionReason = `Geo-Mismatch: IP in ${ipLoc.city} but GPS is ${dist.toFixed(0)}km away`;
+                }
+            }
+        }
+    }
+
+    // CHECK 6: Device Anomaly (Headless Browser)
+    if (data.forensics?.device) {
+        const dev = data.forensics.device.toLowerCase();
+        if (dev.includes('headless') || dev.includes('selenium') || dev.includes('puppeteer') || dev.includes('bot')) {
+            riskLevel = 'CRITICAL';
+            alertType = 'CRITICAL';
+            detectionReason = "Automation Tool Detected (Headless Browser)";
+        }
+    }
+
     console.log(`🔍 [RISK ENGINE] Evaluated ${data.amount} to ${data.toAccount} -> Risk: ${riskLevel}, Alert: ${alertType}`);
 
     // EXECUTE ALERTS
@@ -642,6 +670,32 @@ export async function createAttackTransaction(data: { sender: string, amount: nu
         console.error("Attack Simulation Error:", e);
         return { success: false, error: String(e) };
     }
+}
+
+// ============================================
+// GEOLOCATION & DEVICE FUNDAMENTALS (New Metrics)
+// ============================================
+
+// Mock IP Geolocation Database
+function getIpMockLocation(ip: string): { lat: number, lon: number, city: string } | null {
+    if (ip.startsWith('45.33')) return { lat: 40.7128, lon: -74.0060, city: 'New York (Datacenter)' };
+    if (ip.startsWith('106.51')) return { lat: 12.9716, lon: 77.5946, city: 'Bangalore' };
+    if (ip.startsWith('17.38')) return { lat: 17.3850, lon: 78.4867, city: 'Hyderabad' };
+    if (ip.startsWith('192.168') || ip.startsWith('10.0')) return { lat: 0, lon: 0, city: 'Private Network' }; // Unknown location
+    return null;
+}
+
+// Haversine Formula for Distance (km)
+function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371; // Earth radius in km
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
 }
 
 
