@@ -711,7 +711,9 @@ export async function processUserTransaction(data: {
     try {
         // 1. Validate & Fetch Accounts
         const { data: senderAccount } = await supabase.from('accounts').select('*').eq('id', data.fromAccountId).single();
-        const { data: receiverAccount } = await supabase.from('accounts').select('*').eq('account_number', data.recipient).single();
+        // Fix: Case-insensitive lookup and trim whitespace to prevent "Account not found" for valid inputs
+        const safeRecipient = data.recipient.trim();
+        const { data: receiverAccount } = await supabase.from('accounts').select('*').ilike('account_number', safeRecipient).single();
 
         if (!senderAccount || senderAccount.balance < data.amount) {
             return { success: false, error: "Insufficient funds" };

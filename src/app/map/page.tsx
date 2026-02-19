@@ -58,25 +58,45 @@ function parseCoords(location: string): { lat: number; lon: number } | null {
     return null;
 }
 
+import { useFraudData } from '@/context/FraudContext';
+
+// ...
+
 export default function MapPage() {
+    const { data: fraudData, loading: fraudLoading, refresh } = useFraudData();
     const [transactions, setTransactions] = useState<MapTransaction[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [processing, setProcessing] = useState(false);
     const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
-    const loadMapData = async () => {
-        setLoading(true);
-        try {
-            const data = await getRealFraudData();
-            const events = data.timelineEvents || [];
+    const loading = fraudLoading || processing;
 
+    useEffect(() => {
+        if (fraudData) {
+            setProcessing(true);
+            const events = fraudData.timelineEvents || [];
             const mapTxs: MapTransaction[] = [];
 
             for (const event of events) {
                 const details = event.details;
                 if (!details) continue;
 
-                const coords = parseCoords(details.location);
-                if (!coords) continue;
+                let lat = details.lat;
+                let lon = details.lon;
+
+                if (!lat || !lon) {
+                    const coords = parseCoords(details.location);
+                    if (coords) {
+                        lat = coords.lat;
+                        lon = coords.lon;
+                    }
+                }
+
+                if (!lat && !lon && details.ipLat && details.ipLon) {
+                    lat = details.ipLat;
+                    lon = details.ipLon;
+                }
+
+                if (!lat || !lon) continue;
 
                 mapTxs.push({
                     id: event.id,
@@ -89,28 +109,23 @@ export default function MapPage() {
                     ip: details.ip || 'Unknown',
                     location: details.location || 'Unknown',
                     ipCity: details.ipCity || 'Unknown',
-                    timestamp: event.timestamp,
-                    lat: coords.lat,
-                    lon: coords.lon,
+                    timestamp: details.time || event.timestamp,
+                    lat: lat,
+                    lon: lon,
                     ipLat: details.ipLat || null,
                     ipLon: details.ipLon || null
                 });
             }
-
             setTransactions(mapTxs);
+            setProcessing(false);
             setLastRefresh(new Date());
-        } catch (e) {
-            console.error('Failed to load map data:', e);
-        } finally {
-            setLoading(false);
         }
-    };
+    }, [fraudData]);
 
-    useEffect(() => {
-        loadMapData();
-        const interval = setInterval(loadMapData, 15000); // Refresh every 15s
-        return () => clearInterval(interval);
-    }, []);
+    const handleRefresh = async () => {
+        await refresh();
+        setLastRefresh(new Date());
+    };
 
     const vpnCount = transactions.filter(t => t.isVpn).length;
     const criticalCount = transactions.filter(t => t.riskLevel === 'critical').length;
@@ -131,7 +146,7 @@ export default function MapPage() {
                         Last Sync: {lastRefresh.toLocaleTimeString()}
                     </span>
                     <button
-                        onClick={loadMapData}
+                        onClick={handleRefresh}
                         className="p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-slate-400 hover:text-white transition-all"
                     >
                         <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
