@@ -424,15 +424,19 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
             // Use pre-fetched cache
             if (ipCache.has(rawIp)) {
                 const data = ipCache.get(rawIp);
-                ipCity = data.city;
-                ispName = data.isp;
+                ipCity = data.city || 'Unknown City';
+                ispName = data.isp || 'Unknown ISP';
                 ipLat = data.lat;
                 ipLon = data.lon;
+
+                // Enhanced VPN Detection for Map
                 const ispLower = ispName.toLowerCase();
-                if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy')) {
+                const isKnownVpnIp = rawIp.startsWith('45.33') || rawIp.startsWith('185.') || rawIp.startsWith('10.0');
+                const isVpnIsp = ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy') || ispLower.includes('zenex') || ispLower.includes('digitalocean');
+
+                if (isKnownVpnIp || isVpnIsp) {
                     isVpnTransaction = true;
                 }
-                // Dist check omitted for speed in this pass, trust legacy flag or basic ISP check
             }
         }
 
