@@ -439,19 +439,34 @@ async function runFraudDetection(data: {
         }
     }
 
-    // CHECK 5: Geo-Location Mismatch (VPN/Proxy Leak)
+    // CHECK 5: Geo-Location Mismatch (VPN/Proxy Leak) & ISP Check
     if (data.forensics?.location && data.forensics?.ip) {
-        const ipLoc = getIpMockLocation(data.forensics.ip);
+        const ipLoc = await getRealIpLocation(data.forensics.ip);
+
         if (ipLoc) {
+            // A. ISP / Org Analysis (VPN Detection)
+            const isp = (ipLoc.isp || '').toLowerCase();
+            if (isp.includes('vpn') || isp.includes('cloud') || isp.includes('hosting') || isp.includes('datacenter') || isp.includes('proxy')) {
+                riskLevel = 'HIGH'; // Elevated risk for known hosting providers
+                if (alertType !== 'CRITICAL') {
+                    alertType = 'MODERATE';
+                    detectionReason = `Suspicious ISP Detected: ${ipLoc.isp}`;
+                }
+            }
+
+            // B. Geo-Mismatch Analysis
             // Parse GPS string "lat, lon"
             const [gpsLat, gpsLon] = data.forensics.location.split(',').map((c: string) => parseFloat(c.trim()));
             if (!isNaN(gpsLat) && !isNaN(gpsLon)) {
+                // Determine tolerance based on accuracy confidence (relaxed to 500km for real world drift)
+                const driftTolerance = 500;
                 const dist = calculateHaversineDistance(gpsLat, gpsLon, ipLoc.lat, ipLoc.lon);
-                // If distance > 200km and not a private IP, flag it
-                if (dist > 200 && ipLoc.city !== 'Private Network') {
+
+                // If distance > tolerance and not a private IP, flag it
+                if (dist > driftTolerance && ipLoc.city !== 'Private Network') {
                     riskLevel = 'CRITICAL';
                     alertType = 'CRITICAL';
-                    detectionReason = `Geo-Mismatch: IP in ${ipLoc.city} but GPS is ${dist.toFixed(0)}km away`;
+                    detectionReason = `True Location Mismatch: GPS is ${dist.toFixed(0)}km from IP Location (${ipLoc.city})`;
                 }
             }
         }
@@ -676,13 +691,34 @@ export async function createAttackTransaction(data: { sender: string, amount: nu
 // GEOLOCATION & DEVICE FUNDAMENTALS (New Metrics)
 // ============================================
 
-// Mock IP Geolocation Database
-function getIpMockLocation(ip: string): { lat: number, lon: number, city: string } | null {
-    if (ip.startsWith('45.33')) return { lat: 40.7128, lon: -74.0060, city: 'New York (Datacenter)' };
-    if (ip.startsWith('106.51')) return { lat: 12.9716, lon: 77.5946, city: 'Bangalore' };
-    if (ip.startsWith('17.38')) return { lat: 17.3850, lon: 78.4867, city: 'Hyderabad' };
-    if (ip.startsWith('192.168') || ip.startsWith('10.0')) return { lat: 0, lon: 0, city: 'Private Network' }; // Unknown location
-    return null;
+// ============================================
+// GEOLOCATION & DEVICE FUNDAMENTALS (New Metrics)
+// ============================================
+
+// Real IP Geolocation Database (Using ip-api.com)
+async function getRealIpLocation(ip: string): Promise<{ lat: number, lon: number, city: string, isp: string } | null> {
+    try {
+        // Skip local/private IPs
+        if (ip.startsWith('192.168') || ip.startsWith('10.') || ip.startsWith('127.') || ip === '::1') {
+            return { lat: 0, lon: 0, city: 'Private Network', isp: 'Local Network' };
+        }
+
+        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,lat,lon,city,isp`);
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            return {
+                lat: data.lat,
+                lon: data.lon,
+                city: data.city,
+                isp: data.isp
+            };
+        }
+        return null;
+    } catch (e) {
+        console.warn("IP Geolocation Fetch Failed:", e);
+        return null;
+    }
 }
 
 // Haversine Formula for Distance (km)
