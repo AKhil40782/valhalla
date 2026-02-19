@@ -374,7 +374,7 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
     };
 
     return (
-        <div className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : 'w-full h-full min-h-[400px] bg-slate-950/50 rounded-xl border border-slate-800 relative'} overflow-hidden transition-all duration-300`}>
+        <div className={`${isFullscreen ? '!fixed !inset-0 !z-[99999] !w-screen !h-screen bg-slate-950' : 'w-full h-full min-h-[400px] bg-slate-950/50 rounded-xl border border-slate-800 relative'} overflow-hidden transition-all duration-300`}>
             {/* Export Button */}
             <button
                 onClick={exportGraph}
@@ -477,14 +477,14 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                 <div
                     className="absolute z-20 bg-slate-800 border border-slate-600 rounded-lg p-2 text-xs shadow-xl pointer-events-none"
                     style={{
-                        left: tooltip.x,
-                        top: tooltip.y,
+                        left: tooltip?.x,
+                        top: tooltip?.y,
                         transform: 'translate(-50%, -100%)'
                     }}
                 >
-                    <div className="font-bold text-slate-200 mb-1">{tooltip.data.label}</div>
-                    <div className="text-slate-400">Type: {tooltip.data.type}</div>
-                    {tooltip.data.risk !== undefined && (
+                    <div className="font-bold text-slate-200 mb-1">{tooltip?.data?.label}</div>
+                    <div className="text-slate-400">Type: {tooltip?.data?.type}</div>
+                    {tooltip?.data?.risk !== undefined && (
                         <div className="flex items-center gap-1 mt-1">
                             Risk: {getRiskBadge(tooltip.data.risk)}
                         </div>
