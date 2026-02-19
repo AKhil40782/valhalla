@@ -14,6 +14,7 @@ interface Account {
 
 interface Transaction {
     id: string;
+    from_account_id: string; // Added field
     to_account_number: string;
     amount: number;
     timestamp: string;
@@ -71,9 +72,9 @@ export default function UserDashboard() {
             const { data: tx } = await supabase
                 .from('transactions')
                 .select('*')
-                .eq('from_account_id', accData.id)
+                .or(`from_account_id.eq.${accData.id},to_account_id.eq.${accData.id}`)
                 .order('timestamp', { ascending: false })
-                .limit(10); // Added limit(10) to match original intent
+                .limit(20);
             if (tx) setTransactions(tx);
         } else {
             setTransactions([]); // If no account, no transactions
@@ -332,19 +333,30 @@ export default function UserDashboard() {
                         <p className="text-slate-500 text-center py-8">No transactions yet</p>
                     ) : (
                         <div className="space-y-3">
-                            {transactions.map(tx => (
-                                <div key={tx.id} className="flex items-center justify-between py-3 border-b border-slate-700/50 last:border-0">
-                                    <div>
-                                        <div className="text-white font-medium">To: {tx.to_account_number}</div>
-                                        <div className="text-slate-500 text-xs">
-                                            {new Date(tx.timestamp).toLocaleString()}
+                            {transactions.map(tx => {
+                                const isDebit = tx.from_account_id === account?.id;
+                                return (
+                                    <div key={tx.id} className="flex items-center justify-between py-3 border-b border-slate-700/50 last:border-0">
+                                        <div>
+                                            <div className="text-white font-medium">
+                                                {isDebit ? `To: ${tx.to_account_number || 'Unknown'}` : `From: ${tx.from_account_id ? 'Sender' : 'Unknown'}`}
+                                                {/* Better: If I had sender account number, I'd show it. But I only have IDs usually, unless joined. 
+                                                    Transaction table has to_account_number but maybe not from_account_number? 
+                                                    Let's check interface: it has to_account_number. Does it have from_account_number?
+                                                    I'll assume NO for now, but usually it should. 
+                                                    Wait, if I don't have sender number, I'll just say "Received".
+                                                */}
+                                            </div>
+                                            <div className="text-slate-500 text-xs">
+                                                {new Date(tx.timestamp).toLocaleString()}
+                                            </div>
+                                        </div>
+                                        <div className={`font-mono font-bold ${isDebit ? 'text-red-400' : 'text-green-400'}`}>
+                                            {isDebit ? '-' : '+'}₹{tx.amount.toLocaleString()}
                                         </div>
                                     </div>
-                                    <div className="text-red-400 font-mono font-bold">
-                                        -₹{tx.amount.toLocaleString()}
-                                    </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     )}
                 </div>
