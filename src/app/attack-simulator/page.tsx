@@ -73,6 +73,7 @@ export default function AttackSimulator() {
 
             // Store IDs for linking
             const idMap: Record<string, string[]> = { Legit: [], Mule: [], Hacker: [], Scammed: [] };
+            const accountNumMap: Record<string, string> = {};
             let allAccounts: any[] = [];
             const BATCH_SIZE = 500;
 
@@ -88,10 +89,13 @@ export default function AttackSimulator() {
                     const id = uuidv4();
                     const accName = type === 'Hacker' ? `HACKER_${Math.random().toString(36).substr(2, 6).toUpperCase()}` : generateName();
 
+                    const accNum = `SIM_${Math.random().toString().substr(2, 10)}`;
                     idMap[type].push(id);
+                    accountNumMap[id] = accNum;
+
                     allAccounts.push({
                         id,
-                        account_number: `SIM_${Math.random().toString().substr(2, 10)}`,
+                        account_number: accNum,
                         balance: type === 'Hacker' ? 0 : (type === 'Scammed' ? 500000 : 10000 + Math.random() * 50000),
                         virtual_name: accName,
                         simulation_type: type,
@@ -131,9 +135,10 @@ export default function AttackSimulator() {
                     id: uuidv4(),
                     from_account_id: from,
                     to_account_id: to,
+                    to_account_number: accountNumMap[to] || 'UNKNOWN',
                     amount,
                     timestamp: new Date().toISOString(),
-                    type: 'transfer',
+                    transaction_type: 'transfer',
                     location: 'SIMULATION_GRID',
                     device_id: 'SIM_DEV_' + from.substring(0, 8),
                     ip_address: '10.0.0.1'
