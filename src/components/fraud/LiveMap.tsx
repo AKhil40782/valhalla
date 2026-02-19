@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useEffect, useMemo } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import React, { useEffect, useMemo, useState } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker, useMap } from 'react-leaflet';
+
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -49,6 +50,45 @@ interface MapTransaction {
     timestamp: string;
     lat: number;
     lon: number;
+    ipLat: number | null;
+    ipLon: number | null;
+}
+
+// Clickable VPN button that flies map to VPN IP location
+function VpnFlyButton({ ipLat, ipLon, ipCity }: { ipLat: number; ipLon: number; ipCity: string }) {
+    const map = useMap();
+    const handleClick = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        map.closePopup();
+        // Fly to VPN IP location
+        map.flyTo([ipLat, ipLon], 10, { duration: 2 });
+    };
+    return (
+        <div
+            onClick={handleClick}
+            style={{
+                color: '#a855f7',
+                fontSize: '10px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                padding: '4px 8px',
+                marginTop: '2px',
+                background: 'rgba(168, 85, 247, 0.1)',
+                border: '1px solid rgba(168, 85, 247, 0.3)',
+                borderRadius: '6px',
+                textAlign: 'center',
+                transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => {
+                (e.target as HTMLElement).style.background = 'rgba(168, 85, 247, 0.25)';
+            }}
+            onMouseLeave={(e) => {
+                (e.target as HTMLElement).style.background = 'rgba(168, 85, 247, 0.1)';
+            }}
+        >
+            🛡️ VPN DETECTED — Click to fly to {ipCity} ✈️
+        </div>
+    );
 }
 
 interface LiveMapProps {
@@ -142,7 +182,7 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                     background: #0f172a !important;
                 }
                 .leaflet-tile-pane {
-                    filter: brightness(0.6) contrast(1.3) saturate(0.3) hue-rotate(180deg);
+                    filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9);
                 }
                 .leaflet-control-zoom a {
                     background: #1e293b !important;
@@ -229,7 +269,10 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                                         <div style={{ color: '#64748b', fontSize: '10px' }}>
                                             IP: {tx.ip} | ISP: {tx.isp}
                                         </div>
-                                        {tx.isVpn && (
+                                        {tx.isVpn && tx.ipLat && tx.ipLon && (
+                                            <VpnFlyButton ipLat={tx.ipLat} ipLon={tx.ipLon} ipCity={tx.ipCity} />
+                                        )}
+                                        {tx.isVpn && (!tx.ipLat || !tx.ipLon) && (
                                             <div style={{ color: '#a855f7', fontSize: '10px', fontWeight: 'bold' }}>
                                                 🛡️ VPN DETECTED
                                             </div>
@@ -244,6 +287,50 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                             </div>
                         </Popup>
                     </Marker>
+                ))}
+
+                {/* VPN Ghost Markers — show where VPN IPs actually resolve to */}
+                {transactions.filter(tx => tx.isVpn && tx.ipLat && tx.ipLon).map((tx, idx) => (
+                    <CircleMarker
+                        key={`vpn-ghost-${idx}`}
+                        center={[tx.ipLat!, tx.ipLon!]}
+                        pathOptions={{
+                            color: '#a855f7',
+                            fillColor: '#a855f7',
+                            fillOpacity: 0.2,
+                            weight: 2,
+                            dashArray: '4, 4'
+                        }}
+                        radius={20}
+                    >
+                        <Popup maxWidth={250}>
+                            <div style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                                <div style={{ color: '#a855f7', fontWeight: 'bold', marginBottom: '4px' }}>
+                                    🛡️ VPN Exit Point: {tx.ipCity}
+                                </div>
+                                <div style={{ color: '#94a3b8', fontSize: '10px' }}>
+                                    IP: {tx.ip} | ISP: {tx.isp}
+                                </div>
+                                <div style={{ color: '#64748b', fontSize: '10px', marginTop: '4px' }}>
+                                    Real user location: {tx.lat.toFixed(4)}, {tx.lon.toFixed(4)}
+                                </div>
+                            </div>
+                        </Popup>
+                    </CircleMarker>
+                ))}
+
+                {/* Dashed lines from real location to VPN exit point */}
+                {transactions.filter(tx => tx.isVpn && tx.ipLat && tx.ipLon).map((tx, idx) => (
+                    <Polyline
+                        key={`vpn-trace-${idx}`}
+                        positions={[[tx.lat, tx.lon], [tx.ipLat!, tx.ipLon!]]}
+                        pathOptions={{
+                            color: '#a855f7',
+                            weight: 1.5,
+                            opacity: 0.5,
+                            dashArray: '6, 6'
+                        }}
+                    />
                 ))}
             </MapContainer>
 

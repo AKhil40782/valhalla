@@ -33,6 +33,8 @@ interface MapTransaction {
     timestamp: string;
     lat: number;
     lon: number;
+    ipLat: number | null;
+    ipLon: number | null;
 }
 
 function parseCoords(location: string): { lat: number; lon: number } | null {
@@ -89,7 +91,9 @@ export default function MapPage() {
                     ipCity: details.ipCity || 'Unknown',
                     timestamp: event.timestamp,
                     lat: coords.lat,
-                    lon: coords.lon
+                    lon: coords.lon,
+                    ipLat: details.ipLat || null,
+                    ipLon: details.ipLon || null
                 });
             }
 

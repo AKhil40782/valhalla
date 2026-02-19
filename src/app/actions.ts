@@ -295,6 +295,8 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
             let ipCity = 'Unknown';
             let ispName = 'Unknown';
             let isVpnTransaction = false;
+            let ipLat: number | null = null;
+            let ipLon: number | null = null;
 
             if (rawIp && rawIp !== '0.0.0.0') {
                 try {
@@ -302,6 +304,8 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                     if (ipData) {
                         ipCity = ipData.city;
                         ispName = ipData.isp;
+                        ipLat = ipData.lat;
+                        ipLon = ipData.lon;
                         // Check ISP for known VPN/Hosting providers
                         const ispLower = ispName.toLowerCase();
                         if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('datacenter') || ispLower.includes('proxy') || ispLower.includes('private')) {
@@ -344,6 +348,8 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                     isVpn: isVpnTransaction,
                     isp: ispName,
                     ipCity: ipCity,
+                    ipLat: ipLat,
+                    ipLon: ipLon,
                     macAddress: tx.device_id ? `MAC-${tx.device_id.slice(0, 2)}:${tx.device_id.slice(2, 4)}:${tx.device_id.slice(4, 6)}:${tx.device_id.slice(6, 8)}:FF:FE` : 'N/A'
                 }
             };
