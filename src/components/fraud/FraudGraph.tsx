@@ -494,6 +494,11 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                             ⚠️ VPN DETECTED
                         </div>
                     )}
+                    {tooltip?.data?.ips && tooltip.data.ips.length > 0 && (
+                        <div className="mt-1 pt-1 border-t border-slate-700 text-[10px] text-slate-400">
+                            <span className="font-semibold text-slate-300">IPs:</span> {tooltip.data.ips.join(', ')}
+                        </div>
+                    )}
                 </div>
             )}
 

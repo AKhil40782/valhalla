@@ -260,10 +260,12 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                 const maskedLabel = forceUnmask ? label : (accId.startsWith('SAL_') ? maskAccountNumber(accId) : label);
 
                 const userIps = ipMap.get(accId);
-                let isVpn = false;
-                if (userIps) {
+                let isVpn = accountTxsMap.get(accId)?.some(tx => tx.vpn_flag) || false;
+
+                if (!isVpn && userIps) {
                     userIps.forEach(ip => {
-                        if (ip.startsWith('45.33') || ip.startsWith('192.168') || ip.startsWith('10.0')) isVpn = true;
+                        // 185.x is our sim VPN, 45.33 is Linode (often VPN), 10.0 is legacy sim
+                        if (ip.startsWith('45.33') || ip.startsWith('185.') || ip.startsWith('10.0')) isVpn = true;
                     });
                 }
 
@@ -276,6 +278,7 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                         type: 'account',
                         isHacker: profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker',
                         isVpn: isVpn,
+                        ips: Array.from(userIps || []).slice(0, 3), // Limit payload size
                         risk: finalRiskScore,
                         clusterId: cluster?.id || null,
                         clusterLabel: cluster?.label || null,
