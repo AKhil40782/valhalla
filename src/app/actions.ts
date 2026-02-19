@@ -62,8 +62,32 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
         return { graphElements: [], timelineEvents: [], alerts: [], stats: {} };
     }
 
-    const { data: accounts } = await supabase.from('accounts').select('*');
-    const { data: profiles } = await supabase.from('profiles').select('*');
+    // OPTIMIZATION: Only fetch relevant accounts and profiles (instead of entire DB)
+    const involvedAccountIds = new Set<string>();
+    const involvedAccountNumbers = new Set<string>();
+
+    rawTransactions?.forEach((tx: any) => {
+        if (tx.from_account_id) involvedAccountIds.add(tx.from_account_id);
+        if (tx.to_account_number) involvedAccountNumbers.add(tx.to_account_number);
+    });
+
+    // Parallel fetch for accounts by ID and Account Number (since we have both keys)
+    const [accByIdRes, accByNumRes] = await Promise.all([
+        involvedAccountIds.size > 0 ? supabase.from('accounts').select('*').in('id', Array.from(involvedAccountIds)) : { data: [] },
+        involvedAccountNumbers.size > 0 ? supabase.from('accounts').select('*').in('account_number', Array.from(involvedAccountNumbers)) : { data: [] }
+    ]);
+
+    // Merge unique accounts
+    const allAccountsMap = new Map<string, any>();
+    accByIdRes.data?.forEach((a: any) => allAccountsMap.set(a.id, a));
+    accByNumRes.data?.forEach((a: any) => allAccountsMap.set(a.id, a));
+    const accounts = Array.from(allAccountsMap.values());
+
+    // Fetch only relevant profiles
+    const involvedUserIds = new Set(accounts.map((a: any) => a.user_id).filter(Boolean));
+    const { data: profiles } = involvedUserIds.size > 0
+        ? await supabase.from('profiles').select('*').in('id', Array.from(involvedUserIds))
+        : { data: [] };
 
     const accountMap = new Map(accounts?.map(a => [a.id, a]) || []);
     const accountByNumber = new Map(accounts?.map(a => [a.account_number, a]) || []);
@@ -358,24 +382,39 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
 
             if (rawIp && rawIp !== '0.0.0.0') {
                 try {
-                    const ipData = await getRealIpLocation(rawIp);
-                    if (ipData) {
-                        ipCity = ipData.city;
-                        ispName = ipData.isp;
-                        ipLat = ipData.lat;
-                        ipLon = ipData.lon;
-                        // Check ISP for known VPN/Hosting providers
-                        const ispLower = ispName.toLowerCase();
-                        if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('datacenter') || ispLower.includes('proxy') || ispLower.includes('private')) {
-                            isVpnTransaction = true;
+                    // 🚀 PERFORMANCE FIX: Use stored DB columns if available (skip API call)
+                    // If asn column exists, we already did the lookup!
+                    if (tx.asn && tx.asn !== 'Unknown ISP') {
+                        ispName = tx.asn;
+                        isVpnTransaction = tx.vpn_flag || false; // Uses stored flag
+                        // Still populate city if needed, but skip full lookup if location exists
+                        if (tx.location && !tx.location.includes('(IP)')) {
+                            // We have GPS location, map is happy.
+                        } else {
+                            // Maybe fast lookup for city string if strictly needed?
+                            // But usually stored location handles it.
+                            ipCity = tx.location?.split(' ')[0] || 'Unknown';
                         }
-                        // Check Geo-Mismatch if location available
-                        if (tx.location && tx.location !== 'Unknown' && tx.location !== 'Unknown (Permission Denied)') {
-                            const parts = tx.location.split(',').map((c: string) => parseFloat(c.trim()));
-                            if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-                                const dist = calculateHaversineDistance(parts[0], parts[1], ipData.lat, ipData.lon);
-                                if (dist > 500 && ipData.city !== 'Private Network') {
-                                    isVpnTransaction = true;
+                    } else {
+                        // Fallback: Legacy lookup for old transactions (slow but necessary for historical data)
+                        const ipData = await getRealIpLocation(rawIp);
+                        if (ipData) {
+                            ipCity = ipData.city;
+                            ispName = ipData.isp;
+                            ipLat = ipData.lat; // Restore: needed for map/timeline if available
+                            ipLon = ipData.lon;
+                            const ispLower = ispName.toLowerCase();
+                            if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('datacenter') || ispLower.includes('proxy') || ispLower.includes('private')) {
+                                isVpnTransaction = true;
+                            }
+                            // Restore distance check for legacy
+                            if (tx.location && tx.location !== 'Unknown' && tx.location !== 'Unknown (Permission Denied)') {
+                                const parts = tx.location.split(',').map((c: string) => parseFloat(c.trim()));
+                                if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                                    const dist = calculateHaversineDistance(parts[0], parts[1], ipData.lat, ipData.lon);
+                                    if (dist > 500 && ipData.city !== 'Private Network') {
+                                        isVpnTransaction = true;
+                                    }
                                 }
                             }
                         }
@@ -694,6 +733,28 @@ export async function processUserTransaction(data: {
         const txId = uuidv4();
         const timestamp = new Date().toISOString();
 
+        // 🚀 OPTIMIZATION: Resolve IP Intelligence ONCE at write time
+        let asn = 'Unknown ISP';
+        let vpnFlag = false;
+        let finalLocation = data.forensics.location;
+
+        try {
+            if (data.forensics.ip && data.forensics.ip !== '0.0.0.0') {
+                const ipData = await getRealIpLocation(data.forensics.ip);
+                if (ipData) {
+                    asn = ipData.isp || 'Unknown ISP';
+                    const ispLower = asn.toLowerCase();
+                    if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('datacenter') || ispLower.includes('proxy')) {
+                        vpnFlag = true;
+                    }
+                    // Fallback location if GPS denied
+                    if ((!finalLocation || finalLocation.includes('Permission Denied')) && ipData.city) {
+                        finalLocation = `${ipData.city} (IP)`;
+                    }
+                }
+            }
+        } catch (e) { console.error("IP Lookup Failed", e); }
+
         await supabase.from('transactions').insert({
             id: txId,
             from_account_id: data.fromAccountId,
@@ -702,8 +763,12 @@ export async function processUserTransaction(data: {
             ip_address: data.forensics.ip,
             device_id: data.forensics.deviceId,
             device_name: data.forensics.device,
-            location: data.forensics.location,
-            timestamp: timestamp
+            location: finalLocation,
+            timestamp: timestamp,
+            // Store intelligence to avoid re-fetching on read
+            asn: asn,
+            vpn_flag: vpnFlag,
+            device_fingerprint_id: data.forensics.deviceId ? `fp_${data.forensics.deviceId.substring(0, 12)}` : null
         });
 
         // 3. Update Balances
