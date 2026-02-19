@@ -81,7 +81,7 @@ export function toTransactionEvents(rawTxs: any[]): TransactionEvent[] {
 // 2. IDENTITY LINKING RULES
 // ============================================
 
-const TIME_WINDOW_MS = 5 * 60 * 1000; // 5-minute sliding window
+const TIME_WINDOW_MS = 3 * 60 * 1000; // 3-minute sliding window (strict)
 
 export function detectIdentityLinks(events: TransactionEvent[]): IdentityLink[] {
     const links: IdentityLink[] = [];
@@ -214,11 +214,11 @@ export function detectIdentityLinks(events: TransactionEvent[]): IdentityLink[] 
         for (let j = i + 1; j < behaviorAccounts.length; j++) {
             const [accA, amountsA] = behaviorAccounts[i];
             const [accB, amountsB] = behaviorAccounts[j];
-            // Check similar average amounts (within 30% of each other)
+            // Strict: require 85%+ similarity in average amount to link
             const avgA = amountsA.reduce((s, v) => s + v, 0) / amountsA.length;
             const avgB = amountsB.reduce((s, v) => s + v, 0) / amountsB.length;
             const ratio = Math.min(avgA, avgB) / Math.max(avgA, avgB);
-            if (ratio > 0.7) {
+            if (ratio > 0.85) {
                 addLink(accA, accB, 'behavior', 0.5, {
                     avg_amount_a: avgA.toFixed(0),
                     avg_amount_b: avgB.toFixed(0),
@@ -300,58 +300,73 @@ function calculateClusterMetrics(
 ): ClusterMetricsNormalized {
     const accountSet = new Set(clusterAccounts);
     const clusterEvents = allEvents.filter(e => accountSet.has(e.account_id));
+    const n = clusterAccounts.length;
+    const maxPossiblePairs = n * (n - 1) / 2;
 
-    // Fingerprint Reuse: unique fingerprints shared / total accounts
-    const fingerprints = new Set<string>();
-    const sharedFingerprints = new Set<string>();
+    // --- Fingerprint Reuse (STRICT): If ANY fingerprint is shared → high score ---
+    const fingerprintAccMap = new Map<string, Set<string>>();
     for (const ev of clusterEvents) {
-        if (ev.device_fingerprint_id) fingerprints.add(ev.device_fingerprint_id);
+        if (ev.device_fingerprint_id) {
+            if (!fingerprintAccMap.has(ev.device_fingerprint_id)) fingerprintAccMap.set(ev.device_fingerprint_id, new Set());
+            fingerprintAccMap.get(ev.device_fingerprint_id)!.add(ev.account_id);
+        }
     }
-    for (const fp of fingerprints) {
-        const usedBy = new Set(clusterEvents.filter(e => e.device_fingerprint_id === fp).map(e => e.account_id));
-        if (usedBy.size > 1) sharedFingerprints.add(fp);
+    let sharedFpCount = 0;
+    let maxFpSharing = 0;
+    for (const [, accs] of fingerprintAccMap) {
+        if (accs.size > 1) { sharedFpCount++; maxFpSharing = Math.max(maxFpSharing, accs.size); }
     }
-    const fingerprintReuseScore = clusterAccounts.length > 1
-        ? Math.min(1, sharedFingerprints.size / Math.max(1, fingerprints.size))
+    // Exponential scaling: even 1 shared fingerprint is highly suspicious
+    const fingerprintReuseScore = n > 1
+        ? Math.min(1, sharedFpCount > 0 ? 0.6 + (maxFpSharing / n) * 0.4 : 0)
         : 0;
 
-    // Device ID Reuse
-    const devices = new Set<string>();
-    const sharedDevices = new Set<string>();
+    // --- Device ID Reuse (STRICT): Same logic ---
+    const deviceAccMap = new Map<string, Set<string>>();
     for (const ev of clusterEvents) {
-        if (ev.device_id) devices.add(ev.device_id);
+        if (ev.device_id) {
+            if (!deviceAccMap.has(ev.device_id)) deviceAccMap.set(ev.device_id, new Set());
+            deviceAccMap.get(ev.device_id)!.add(ev.account_id);
+        }
     }
-    for (const did of devices) {
-        const usedBy = new Set(clusterEvents.filter(e => e.device_id === did).map(e => e.account_id));
-        if (usedBy.size > 1) sharedDevices.add(did);
+    let sharedDevCount = 0;
+    let maxDevSharing = 0;
+    for (const [, accs] of deviceAccMap) {
+        if (accs.size > 1) { sharedDevCount++; maxDevSharing = Math.max(maxDevSharing, accs.size); }
     }
-    const deviceIdReuseScore = clusterAccounts.length > 1
-        ? Math.min(1, sharedDevices.size / Math.max(1, devices.size))
+    const deviceIdReuseScore = n > 1
+        ? Math.min(1, sharedDevCount > 0 ? 0.5 + (maxDevSharing / n) * 0.5 : 0)
         : 0;
 
-    // IP / Subnet / ASN Reuse (combined)
+    // --- IP / Subnet / ASN Reuse: Boosted scoring ---
     const ipLinks = clusterLinks.filter(l => l.link_type === 'ip' || l.link_type === 'subnet' || l.link_type === 'asn');
-    const maxPossiblePairs = clusterAccounts.length * (clusterAccounts.length - 1) / 2;
+    // Weight: same-IP links count more than subnet which count more than ASN
+    let ipWeight = 0;
+    for (const link of ipLinks) {
+        if (link.link_type === 'ip') ipWeight += 1.0;
+        else if (link.link_type === 'subnet') ipWeight += 0.7;
+        else ipWeight += 0.4; // ASN
+    }
     const ipSubnetAsnReuseScore = maxPossiblePairs > 0
-        ? Math.min(1, ipLinks.length / maxPossiblePairs)
+        ? Math.min(1, ipWeight / maxPossiblePairs)
         : 0;
 
-    // VPN Presence
-    const vpnCount = clusterEvents.filter(e => e.vpn_flag).length;
-    const vpnPresenceScore = clusterEvents.length > 0
-        ? Math.min(1, vpnCount / clusterEvents.length)
+    // --- VPN Presence (STRICT): Any VPN usage in cluster is heavily penalized ---
+    const vpnAccounts = new Set(clusterEvents.filter(e => e.vpn_flag).map(e => e.account_id));
+    const vpnPresenceScore = n > 0
+        ? Math.min(1, vpnAccounts.size > 0 ? 0.5 + (vpnAccounts.size / n) * 0.5 : 0)
         : 0;
 
-    // Time Synchronization
+    // --- Time Synchronization (STRICT): Even a couple of time-synced pairs is suspicious ---
     const timeLinks = clusterLinks.filter(l => l.link_type === 'time');
-    const timeSyncScore = maxPossiblePairs > 0
-        ? Math.min(1, timeLinks.length / maxPossiblePairs)
-        : 0;
+    const timeSyncRatio = maxPossiblePairs > 0 ? timeLinks.length / maxPossiblePairs : 0;
+    // Apply sqrt scaling to amplify moderate values
+    const timeSyncScore = Math.min(1, Math.sqrt(timeSyncRatio));
 
-    // Graph Density (edges / max possible edges)
-    const graphDensityScore = maxPossiblePairs > 0
-        ? Math.min(1, clusterLinks.length / maxPossiblePairs)
-        : 0;
+    // --- Graph Density: More aggressive scaling ---
+    const rawDensity = maxPossiblePairs > 0 ? clusterLinks.length / maxPossiblePairs : 0;
+    // Power curve: even moderate density is suspicious
+    const graphDensityScore = Math.min(1, Math.pow(rawDensity, 0.7));
 
     return {
         fingerprintReuseScore,
@@ -368,13 +383,29 @@ function calculateClusterMetrics(
 // ============================================
 
 function computeRiskScore(metrics: ClusterMetricsNormalized): number {
-    return (
-        metrics.fingerprintReuseScore * 0.30 +
-        metrics.timeSyncScore * 0.30 +
-        metrics.ipSubnetAsnReuseScore * 0.20 +
-        metrics.graphDensityScore * 0.15 +
-        metrics.vpnPresenceScore * 0.05
+    // Base weighted formula (includes deviceId which was missing before)
+    const base = (
+        metrics.fingerprintReuseScore * 0.25 +
+        metrics.timeSyncScore * 0.20 +
+        metrics.ipSubnetAsnReuseScore * 0.15 +
+        metrics.deviceIdReuseScore * 0.15 +
+        metrics.graphDensityScore * 0.10 +
+        metrics.vpnPresenceScore * 0.15
     );
+
+    // 🔥 Multi-signal amplification: when 3+ signals fire, it's very likely fraud
+    const activeSignals = [
+        metrics.fingerprintReuseScore > 0.3,
+        metrics.deviceIdReuseScore > 0.3,
+        metrics.timeSyncScore > 0.3,
+        metrics.ipSubnetAsnReuseScore > 0.3,
+        metrics.vpnPresenceScore > 0.3,
+        metrics.graphDensityScore > 0.5,
+    ].filter(Boolean).length;
+
+    const amplification = activeSignals >= 4 ? 0.25 : activeSignals >= 3 ? 0.15 : activeSignals >= 2 ? 0.05 : 0;
+
+    return Math.min(1, base + amplification);
 }
 
 // ============================================
@@ -382,8 +413,8 @@ function computeRiskScore(metrics: ClusterMetricsNormalized): number {
 // ============================================
 
 function classifyRisk(score: number): 'low' | 'medium' | 'high' {
-    if (score >= 0.70) return 'high';
-    if (score >= 0.40) return 'medium';
+    if (score >= 0.55) return 'high';    // Tightened from 0.70
+    if (score >= 0.30) return 'medium';  // Tightened from 0.40
     return 'low';
 }
 
@@ -471,10 +502,13 @@ export async function runFraudEngine(rawTransactions: any[], accountNames: Map<s
     let clusterIndex = 0;
 
     for (const [root, accountIds] of clusterMap) {
-        // Only analyze clusters with 2+ accounts (single accounts are not networks)
         if (accountIds.length < 2) {
-            // Single accounts get default low risk from the engine
-            accountRiskMap.set(accountIds[0], { riskScore: 0, riskLevel: 'low', clusterId: root });
+            // Even single accounts can have suspicious attributes (VPN, shared device)
+            const singleEvents = events.filter(e => e.account_id === accountIds[0]);
+            const hasVpn = singleEvents.some(e => e.vpn_flag);
+            const singleScore = hasVpn ? 0.20 : 0;
+            const singleLevel = classifyRisk(singleScore);
+            accountRiskMap.set(accountIds[0], { riskScore: singleScore, riskLevel: singleLevel, clusterId: root });
             continue;
         }
 
