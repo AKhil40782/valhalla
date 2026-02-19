@@ -1195,18 +1195,21 @@ export async function resetSimulationData() {
 // BATCH SIMULATION ACTIONS
 // ============================================
 
-export async function saveAccountsBatch(accounts: any[]) {
+export async function saveAccountsBatch(accounts: any[], ownerId?: string) {
     // 1. Get a valid user ID (simulation owner)
-    // We'll use the first available user or a fallback
-    // In production, this should be a specific 'Simulator' user
-    const { data: users } = await supabase.from('profiles').select('id').limit(1);
-    const ownerId = users?.[0]?.id;
+    // Preference: Explicit ownerId > First available user
+    let targetUserId = ownerId;
 
-    if (!ownerId) return { success: false, error: "No valid user found to own simulated accounts." };
+    if (!targetUserId) {
+        const { data: users } = await supabase.from('profiles').select('id').limit(1);
+        targetUserId = users?.[0]?.id;
+    }
+
+    if (!targetUserId) return { success: false, error: "No valid user found to own simulated accounts." };
 
     const accountsWithUser = accounts.map(acc => ({
         ...acc,
-        user_id: ownerId, // Link to valid user
+        user_id: targetUserId, // Link to valid user
         is_simulated: true
     }));
 

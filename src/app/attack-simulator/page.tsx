@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input";
 import { createAttackTransaction, saveAccountsBatch, saveTransactionsBatch } from '../actions';
 import { Loader2, AlertCircle, ShieldAlert, Cpu, Users, ArrowRightLeft, Database } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function AttackSimulator() {
+    const { user } = useAuth();
     const [mode, setMode] = useState<'single' | 'batch'>('single');
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState<'idle' | 'success' | 'detected'>('idle');
@@ -99,14 +101,18 @@ export default function AttackSimulator() {
                     });
 
                     if (allAccounts.length >= BATCH_SIZE) {
-                        await saveAccountsBatch(allAccounts);
+                        const result = await saveAccountsBatch(allAccounts, user?.id);
+                        if (!result.success) { throw new Error(result.error); }
                         allAccounts = [];
                         processed += BATCH_SIZE;
                         setProgress((processed / (total * 2)) * 100); // 50% for accounts
                     }
                 }
             }
-            if (allAccounts.length > 0) await saveAccountsBatch(allAccounts);
+            if (allAccounts.length > 0) {
+                const result = await saveAccountsBatch(allAccounts, user?.id);
+                if (!result.success) throw new Error(result.error);
+            }
 
             addLog("✅ Accounts Created. Linking Transactions...");
 
@@ -163,7 +169,8 @@ export default function AttackSimulator() {
 
             for (let i = 0; i < totalTxs; i += txBatchSize) {
                 const batch = allTxs.slice(i, i + txBatchSize);
-                await saveTransactionsBatch(batch);
+                const result = await saveTransactionsBatch(batch);
+                if (!result.success) throw new Error("Transactions Save Failed: " + result.error);
                 setProgress(50 + ((i / totalTxs) * 50));
             }
 
