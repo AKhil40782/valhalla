@@ -656,6 +656,14 @@ export async function processUserTransaction(data: {
             return { success: false, error: "Account Frozen" };
         }
 
+        if (!receiverAccount) {
+            return { success: false, error: "Invalid Recipient: Account not found" };
+        }
+
+        if (data.forensics.location && (data.forensics.location.includes('Permission Denied') || data.forensics.location === 'Unknown')) {
+            return { success: false, error: "Secure Sync Failed: Location permission denied. Please allow location access." };
+        }
+
         // 2. Insert Transaction
         const txId = uuidv4();
         const timestamp = new Date().toISOString();

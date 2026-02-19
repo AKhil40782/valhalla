@@ -28,6 +28,7 @@ export default function UserDashboard() {
     const [sendModal, setSendModal] = useState(false);
     const [sendData, setSendData] = useState({ recipient: '', amount: '' });
     const [sendLoading, setSendLoading] = useState(false);
+    const [syncLoading, setSyncLoading] = useState(false); // New loading state for secure sync
     const [sendError, setSendError] = useState('');
     const [sendSuccess, setSendSuccess] = useState(false);
 
@@ -373,12 +374,25 @@ export default function UserDashboard() {
                                 </div>
                                 <Button
                                     onClick={async () => {
-                                        const forensics = await collectRealForensics();
-                                        setRealForensics(forensics);
+                                        setSyncLoading(true);
+                                        try {
+                                            const forensics = await collectRealForensics();
+                                            setRealForensics(forensics);
+                                        } finally {
+                                            setSyncLoading(false);
+                                        }
                                     }}
-                                    className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-6"
+                                    disabled={syncLoading}
+                                    className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-6 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                    🔓 Allow Secure Sync
+                                    {syncLoading ? (
+                                        <div className="flex items-center gap-2">
+                                            <RefreshCw className="w-5 h-5 animate-spin" />
+                                            <span>Syncing Device...</span>
+                                        </div>
+                                    ) : (
+                                        <>🔓 Allow Secure Sync</>
+                                    )}
                                 </Button>
                                 <button
                                     onClick={() => setSendModal(false)}
