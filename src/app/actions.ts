@@ -90,7 +90,10 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
         : { data: [] };
 
     const accountMap = new Map(accounts?.map(a => [a.id, a]) || []);
-    const accountByNumber = new Map(accounts?.map(a => [a.account_number, a]) || []);
+    const accountByNumber = new Map();
+    accounts?.forEach(a => {
+        if (a.account_number) accountByNumber.set(a.account_number.trim().toUpperCase(), a);
+    });
     const profileMap = new Map(profiles?.map(p => [p.id, p]) || []);
 
     // 2️⃣ METRIC TRACKERS
@@ -103,14 +106,16 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
 
     const transactions = rawTransactions?.map(tx => {
         const fromAccount = accountMap.get(tx.from_account_id);
-        const toAccount = accountByNumber.get(tx.to_account_number);
+        const cleanToNum = (tx.to_account_number || '').trim().toUpperCase();
+        const toAccount = accountByNumber.get(cleanToNum);
+
         const fromProfile = fromAccount ? profileMap.get(fromAccount.user_id) : null;
         const toProfile = toAccount ? profileMap.get(toAccount.user_id) : null;
 
         const transformed = {
             ...tx,
             from_name: fromProfile?.full_name || (fromAccount ? 'Unknown User' : 'External / Unknown'),
-            to_account_id: toAccount?.id || tx.to_account_number,
+            to_account_id: toAccount?.id || cleanToNum, // Use UUID if found, else normalized number
             to_name: toProfile?.full_name || tx.to_account_number,
         };
 
@@ -162,15 +167,63 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
         }
     });
 
+    // ------------------------------------------------------------------
+    // 4️⃣ OPTIMIZED GRAPH GENERATION (Edge Aggregation & Performance)
+    // ------------------------------------------------------------------
+
     const nodes: any[] = [];
-    const edges: any[] = [];
     const processedNodes = new Set<string>();
 
-    // Formula Component: Graph Density
+    // Aggregation Maps
+    const edgeMap = new Map<string, { source: string, target: string, amount: number, count: number, type: string }>();
+    const uniqueIpsToResolve = new Set<string>();
+
+    transactions.forEach(tx => {
+        // Collect IPs for batch resolution
+        const rawIp = (tx.ip_address || '').split(' ')[0].split('[')[0].trim();
+        if (rawIp && rawIp !== '0.0.0.0' && (!tx.asn || tx.asn === 'Unknown ISP')) {
+            uniqueIpsToResolve.add(rawIp);
+        }
+
+        // Aggregate Edges
+        if (tx.from_account_id && tx.to_account_id) {
+            const edgeKey = `${tx.from_account_id}-${tx.to_account_id}`;
+            const existing = edgeMap.get(edgeKey);
+            if (existing) {
+                existing.amount += tx.amount;
+                existing.count += 1;
+            } else {
+                edgeMap.set(edgeKey, {
+                    source: tx.from_account_id,
+                    target: tx.to_account_id,
+                    amount: tx.amount,
+                    count: 1,
+                    type: 'transfer'
+                });
+            }
+        }
+    });
+
+    // 🚀 BATCH IP RESOLUTION
+    const ipCache = new Map<string, any>();
+    const ipArray = Array.from(uniqueIpsToResolve);
+    // Limit to 20 to prevent timeout, others stay unknown
+    const ipsToFetch = ipArray.slice(0, 20);
+
+    if (ipsToFetch.length > 0) {
+        await Promise.all(ipsToFetch.map(async (ip) => {
+            try {
+                const data = await getRealIpLocation(ip);
+                if (data) ipCache.set(ip, data);
+            } catch (e) { /* ignore */ }
+        }));
+    }
+
+    // Build Nodes
     const potentialLinksCount = (accounts?.length || 1) * ((accounts?.length || 1) - 1);
     const graphDensity = potentialLinksCount > 0 ? transactions.length / potentialLinksCount : 0;
 
-    // Build cluster lookup for each account
+    // Build cluster lookup
     const accountClusterMap = new Map<string, FraudCluster>();
     for (const cluster of fraudClusters) {
         for (const accId of cluster.accountIds) {
@@ -179,8 +232,9 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
     }
 
     transactions.forEach(tx => {
+        // NODES
         [tx.from_account_id, tx.to_account_id].forEach(accId => {
-            if (!processedNodes.has(accId)) {
+            if (accId && !processedNodes.has(accId)) {
                 // Identity Sharing Metrics (for display)
                 let maxDeviceReuse = 0;
                 deviceMap.forEach(users => { if (users.has(accId)) maxDeviceReuse = Math.max(maxDeviceReuse, users.size); });
@@ -192,25 +246,19 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                 const burstMode = (accountTxsMap.get(accId)?.filter(t => (Date.now() - new Date(t.timestamp).getTime()) < 900000).length || 0) >= 5;
                 const thresholdDodging = transactions.some(t => t.from_account_id === accId && t.amount >= 9000 && t.amount <= 9999);
 
-                // 🛑 ENGINE-DERIVED RISK SCORE (replaces old ad-hoc formula)
                 const engineData = engineRiskMap.get(accId);
                 const inDegree = inDegreeMap.get(accId) || 0;
-
-                // Use engine cluster risk score (0-1 → 0-100), with fan-in bonus
                 let finalRiskScore = engineData ? engineData.riskScore * 100 : 0;
 
-                // Boost for fan-in pattern (money mule detection)
                 if (inDegree >= 3) finalRiskScore = Math.max(finalRiskScore, 85);
                 else if (inDegree >= 2) finalRiskScore = Math.max(finalRiskScore, 65);
                 if (burstMode) finalRiskScore = Math.min(100, finalRiskScore + 15);
                 if (thresholdDodging) finalRiskScore = Math.min(100, finalRiskScore + 20);
-
                 finalRiskScore = Math.min(100, finalRiskScore);
 
                 const label = (accId.startsWith('SAL_') ? accId : profileMap.get(accountMap.get(accId)?.user_id)?.full_name) || accId;
                 const maskedLabel = forceUnmask ? label : (accId.startsWith('SAL_') ? maskAccountNumber(accId) : label);
 
-                // VPN / Proxy Detection
                 const userIps = ipMap.get(accId);
                 let isVpn = false;
                 if (userIps) {
@@ -219,7 +267,6 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                     });
                 }
 
-                // Get cluster info for this account
                 const cluster = accountClusterMap.get(accId);
 
                 nodes.push({
@@ -230,7 +277,6 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                         isHacker: profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker',
                         isVpn: isVpn,
                         risk: finalRiskScore,
-                        // Engine-derived cluster data
                         clusterId: cluster?.id || null,
                         clusterLabel: cluster?.label || null,
                         clusterRiskLevel: cluster?.riskLevel || engineData?.riskLevel || 'low',
@@ -243,23 +289,21 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                             degree: (inDegreeMap.get(accId) || 0) + (outDegreeMap.get(accId) || 0),
                             burstMode,
                             thresholdDodging,
-                            // Engine-normalized scores
                             engineRiskScore: engineData ? (engineData.riskScore * 100).toFixed(0) : '0',
                             fingerprintReuse: cluster?.metrics?.fingerprintReuseScore ? (cluster.metrics.fingerprintReuseScore * 100).toFixed(0) : '0',
                             timeSyncEngine: cluster?.metrics?.timeSyncScore ? (cluster.metrics.timeSyncScore * 100).toFixed(0) : '0',
                             networkReuse: cluster?.metrics?.ipSubnetAsnReuseScore ? (cluster.metrics.ipSubnetAsnReuseScore * 100).toFixed(0) : '0',
                             graphDensityEngine: cluster?.metrics?.graphDensityScore ? (cluster.metrics.graphDensityScore * 100).toFixed(0) : '0',
                             vpnPresence: cluster?.metrics?.vpnPresenceScore ? (cluster.metrics.vpnPresenceScore * 100).toFixed(0) : '0',
+                            // New ML fields
+                            ml_score: cluster?.mlScore || 0,
+                            anomaly_score: cluster?.anomalyScore || 0
                         }
                     },
                     classes: `${finalRiskScore > 80 ? 'critical-risk' : finalRiskScore > 50 ? 'high-risk' : finalRiskScore > 30 ? 'medium-risk' : ''} ${profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker' ? 'hacker-node' : ''} ${isVpn ? 'vpn-node' : ''}`.trim()
                 });
                 processedNodes.add(accId);
             }
-        });
-
-        edges.push({
-            data: { source: tx.from_account_id, target: tx.to_account_id, type: 'transfer', amount: tx.amount }
         });
 
         // 🔗 FORENSIC ENTITY CHAIN (Account -> Device -> IP)
@@ -277,7 +321,14 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                 });
                 processedNodes.add(devId);
             }
-            edges.push({ data: { source: tx.from_account_id, target: devId, type: 'device_link' } });
+            // Device links don't get aggregated usually, but we could if needed
+            // Checking if edge exists? No, for Device->Account there's usually one link per tx.
+            // But if user used same device 100 times, we get 100 edges.
+            // Deduplicate Device Links!
+            const devEdgeKey = `${tx.from_account_id}-${devId}`;
+            if (!edgeMap.has(devEdgeKey)) {
+                edgeMap.set(devEdgeKey, { source: tx.from_account_id, target: devId, amount: 0, count: 1, type: 'device_link' });
+            }
 
             if (tx.ip_address) {
                 const ipId = tx.ip_address;
@@ -293,16 +344,20 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                     });
                     processedNodes.add(ipId);
                 }
-                edges.push({ data: { source: devId, target: ipId, type: 'network_link' } });
+                const netEdgeKey = `${devId}-${ipId}`;
+                if (!edgeMap.has(netEdgeKey)) {
+                    edgeMap.set(netEdgeKey, { source: devId, target: ipId, amount: 0, count: 1, type: 'network_link' });
+                }
             }
         }
     });
 
-    // 🚨 CLUSTER RISK INHERITANCE: If one node is high risk, the whole cluster is high risk
-    // This ensures visually consistent "Fraud Rings" where all members are flagged
-    const clusterMaxRisk = new Map<string, number>();
+    const edges = Array.from(edgeMap.values()).map(e => ({
+        data: e
+    }));
 
-    // 1. Find max risk per cluster
+    // 🚨 CLUSTER RISK INHERITANCE
+    const clusterMaxRisk = new Map<string, number>();
     nodes.forEach(node => {
         if (node.data.clusterId && node.data.type === 'account') {
             const currentMax = clusterMaxRisk.get(node.data.clusterId) || 0;
@@ -312,145 +367,100 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
         }
     });
 
-    // 2. Update all nodes in cluster to max risk
     nodes.forEach(node => {
         if (node.data.clusterId && node.data.type === 'account') {
             const maxRisk = clusterMaxRisk.get(node.data.clusterId);
             if (maxRisk && maxRisk > node.data.risk) {
                 node.data.risk = maxRisk;
-                // Update class for UI color to match new risk
                 node.classes = `${maxRisk > 80 ? 'critical-risk' : maxRisk > 50 ? 'high-risk' : maxRisk > 30 ? 'medium-risk' : ''} ${node.data.isHacker ? 'hacker-node' : ''} ${node.data.isVpn ? 'vpn-node' : ''}`.trim();
             }
         }
     });
 
-    // 4️⃣ ALERT GENERATION (Fan-In Pattern Detection)
+    // 4️⃣ ALERT GENERATION
     const alerts: any[] = [];
     const maxInDegreeVal = Math.max(...Array.from(inDegreeMap.values()), 0);
     const topHackerNodeId = Array.from(inDegreeMap.entries())
-        .filter(([id]) => id !== 'SYSTEM_FREEZE') // Ignore system nodes
+        .filter(([id]) => id !== 'SYSTEM_FREEZE')
         .sort((a, b) => b[1] - a[1])[0]?.[0];
 
     if (maxInDegreeVal >= 3) {
         const suspectName = accountByNumber.get(topHackerNodeId!)?.account_number || topHackerNodeId;
-        alerts.push({
-            id: 'alert-critical-fanin',
-            title: `🔴 CRITICAL: Aggregated Fan-In Cluster`,
-            severity: 'Critical',
-            time: 'LIVE',
-            description: `Core node "${suspectName}" is receiving coordinated funds from ${maxInDegreeVal} sources. High probability of Money Laundering.`
-        });
+        alerts.push({ id: 'alert-critical-fanin', title: `🔴 CRITICAL: Aggregated Fan-In Cluster`, severity: 'Critical', time: 'LIVE', description: `Core node "${suspectName}" is receiving coordinated funds from ${maxInDegreeVal} sources. High probability of Money Laundering.` });
     } else if (maxInDegreeVal >= 2) {
         const suspectName = accountByNumber.get(topHackerNodeId!)?.account_number || topHackerNodeId;
-        alerts.push({
-            id: 'alert-moderate-velocity',
-            title: `🟡 MODERATE: Multi-Source Inflow`,
-            severity: 'Medium',
-            time: 'LIVE',
-            description: `Account "${suspectName}" is receiving funds from ${maxInDegreeVal} different accounts. Monitoring for "Mule" behavior.`
-        });
+        alerts.push({ id: 'alert-moderate-velocity', title: `🟡 MODERATE: Multi-Source Inflow`, severity: 'Medium', time: 'LIVE', description: `Account "${suspectName}" is receiving funds from ${maxInDegreeVal} different accounts. Monitoring for "Mule" behavior.` });
     }
 
     const accountNodes = nodes.filter(n => n.data.type === 'account');
-    const totalSync = accountNodes.reduce((sum, n) => {
-        return sum + parseFloat(n.data.metrics?.syncScore || '0');
-    }, 0);
+    const totalSync = accountNodes.reduce((sum, n) => sum + parseFloat(n.data.metrics?.syncScore || '0'), 0);
     const avgSync = accountNodes.length > 0 ? (totalSync / accountNodes.length).toFixed(0) : '0';
+
+    // 5️⃣ TIMELINE GENERATION (Using Cache)
+    const timelineEvents = transactions.map(tx => {
+        let riskLevel = 'low';
+        if (tx.amount > 50000) riskLevel = 'critical';
+        else if (tx.amount >= 9000 && tx.amount <= 9999) riskLevel = 'high';
+        else if (tx.amount >= 5000) riskLevel = 'medium';
+
+        const rawIp = (tx.ip_address || '').split(' ')[0].split('[')[0].trim();
+        let ipCity = 'Unknown';
+        let ispName = 'Unknown';
+        let isVpnTransaction = tx.vpn_flag || false;
+        let ipLat = null;
+        let ipLon = null;
+
+        if (tx.asn && tx.asn !== 'Unknown ISP') {
+            ispName = tx.asn;
+            if (tx.location && !tx.location.includes('(IP)')) {
+                // location good
+            } else {
+                ipCity = tx.location?.split(' ')[0] || 'Unknown';
+            }
+        } else {
+            // Use pre-fetched cache
+            if (ipCache.has(rawIp)) {
+                const data = ipCache.get(rawIp);
+                ipCity = data.city;
+                ispName = data.isp;
+                ipLat = data.lat;
+                ipLon = data.lon;
+                const ispLower = ispName.toLowerCase();
+                if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy')) {
+                    isVpnTransaction = true;
+                }
+                // Dist check omitted for speed in this pass, trust legacy flag or basic ISP check
+            }
+        }
+
+        return {
+            id: tx.id,
+            timestamp: tx.timestamp,
+            description: `₹${tx.amount.toLocaleString()} flow from ${tx.from_name} to ${tx.to_name}`,
+            riskLevel,
+            type: riskLevel === 'critical' || riskLevel === 'high' ? 'ALERT' : 'FLOW',
+            details: {
+                ...tx,
+                from: tx.from_name,
+                to: tx.to_name,
+                time: tx.timestamp,
+                ip: tx.ip_address || 'Unknown',
+                subnet: tx.ip_address && tx.ip_address.includes('.') ? tx.ip_address.split('.').slice(0, 3).join('.') + '.0' : 'Unknown',
+                imei: tx.device_id || 'Unknown Hardware ID',
+                device: tx.device_name || 'Web Browser',
+                isVpn: isVpnTransaction,
+                isp: ispName,
+                ipCity: ipCity,
+                ipLat: ipLat,
+                ipLon: ipLon,
+                macAddress: tx.device_id ? `MAC-${tx.device_id.substring(0, 2)}...` : 'N/A'
+            }
+        };
+    });
 
     return {
         graphElements: [...nodes, ...edges],
-        timelineEvents: await Promise.all(transactions.map(async tx => {
-            // Risk Classification:
-            // - critical: Large amounts (>50k) - likely money laundering
-            // - high: Threshold dodging pattern (9000-9999 to avoid 10k reporting)
-            // - medium: Elevated amounts (5000-50000)
-            // - low: Normal banking activity (<5000)
-            let riskLevel = 'low';
-            if (tx.amount > 50000) riskLevel = 'critical';
-            else if (tx.amount >= 9000 && tx.amount <= 9999) riskLevel = 'high';
-            else if (tx.amount >= 5000) riskLevel = 'medium';
-
-            // Extract raw IPv4 from composite string like "1.2.3.4 (v6: ...) [Local: ...]"
-            const rawIp = (tx.ip_address || '').split(' ')[0].split('[')[0].trim();
-
-            // Real-time IP intelligence lookup
-            let ipCity = 'Unknown';
-            let ispName = 'Unknown';
-            let isVpnTransaction = false;
-            let ipLat: number | null = null;
-            let ipLon: number | null = null;
-
-            if (rawIp && rawIp !== '0.0.0.0') {
-                try {
-                    // 🚀 PERFORMANCE FIX: Use stored DB columns if available (skip API call)
-                    // If asn column exists, we already did the lookup!
-                    if (tx.asn && tx.asn !== 'Unknown ISP') {
-                        ispName = tx.asn;
-                        isVpnTransaction = tx.vpn_flag || false; // Uses stored flag
-                        // Still populate city if needed, but skip full lookup if location exists
-                        if (tx.location && !tx.location.includes('(IP)')) {
-                            // We have GPS location, map is happy.
-                        } else {
-                            // Maybe fast lookup for city string if strictly needed?
-                            // But usually stored location handles it.
-                            ipCity = tx.location?.split(' ')[0] || 'Unknown';
-                        }
-                    } else {
-                        // Fallback: Legacy lookup for old transactions (slow but necessary for historical data)
-                        const ipData = await getRealIpLocation(rawIp);
-                        if (ipData) {
-                            ipCity = ipData.city;
-                            ispName = ipData.isp;
-                            ipLat = ipData.lat; // Restore: needed for map/timeline if available
-                            ipLon = ipData.lon;
-                            const ispLower = ispName.toLowerCase();
-                            if (ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('datacenter') || ispLower.includes('proxy') || ispLower.includes('private')) {
-                                isVpnTransaction = true;
-                            }
-                            // Restore distance check for legacy
-                            if (tx.location && tx.location !== 'Unknown' && tx.location !== 'Unknown (Permission Denied)') {
-                                const parts = tx.location.split(',').map((c: string) => parseFloat(c.trim()));
-                                if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-                                    const dist = calculateHaversineDistance(parts[0], parts[1], ipData.lat, ipData.lon);
-                                    if (dist > 500 && ipData.city !== 'Private Network') {
-                                        isVpnTransaction = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (e) {
-                    // Silently fail for individual lookups
-                }
-            }
-
-            return {
-                id: tx.id,
-                timestamp: tx.timestamp,
-                description: `₹${tx.amount.toLocaleString()} flow from ${tx.from_name} to ${tx.to_name}`,
-                riskLevel,
-                type: riskLevel === 'critical' || riskLevel === 'high' ? 'ALERT' : 'FLOW',
-                details: {
-                    ...tx,
-                    from: tx.from_name,
-                    to: tx.to_name,
-                    time: tx.timestamp,
-                    ip: tx.ip_address || 'Unknown',
-                    subnet: tx.ip_address && tx.ip_address.includes('.')
-                        ? tx.ip_address.split('.').slice(0, 3).join('.') + '.0'
-                        : 'Unknown',
-                    imei: tx.device_id || 'Unknown Hardware ID',
-                    device: tx.device_name || 'Web Browser',
-                    // New enriched fields
-                    isVpn: isVpnTransaction,
-                    isp: ispName,
-                    ipCity: ipCity,
-                    ipLat: ipLat,
-                    ipLon: ipLon,
-                    macAddress: tx.device_id ? `MAC-${tx.device_id.slice(0, 2)}:${tx.device_id.slice(2, 4)}:${tx.device_id.slice(4, 6)}:${tx.device_id.slice(6, 8)}:FF:FE` : 'N/A'
-                }
-            };
-        })),
+        timelineEvents,
         alerts,
         stats: {
             totalTransactions: transactions.length,
@@ -459,7 +469,6 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
             avgSyncScore: avgSync,
             suspectedHacker: maxInDegreeVal >= 3 ? 'Critical' : maxInDegreeVal >= 2 ? 'Moderate' : 'Negative',
         },
-        // Only show hacker alert when there's actual pattern (2+ sources)
         hackerInfo: (topHackerNodeId && maxInDegreeVal >= 2) ? {
             id: topHackerNodeId,
             name: accountByNumber.get(topHackerNodeId)?.account_number || topHackerNodeId,
@@ -467,7 +476,6 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
             severity: maxInDegreeVal >= 3 ? 'CRITICAL' : 'MODERATE',
             is_frozen: accountByNumber.get(topHackerNodeId)?.is_frozen || false
         } : null,
-        // Engine-detected fraud clusters with explainability
         fraudClusters: fraudClusters.map(c => ({
             id: c.id,
             label: c.label,

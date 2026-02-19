@@ -102,7 +102,20 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                         style: {
                             'line-color': '#22d3ee',
                             'target-arrow-color': '#22d3ee',
-                            'width': 3.5,
+                            'width': (ele: any) => Math.min(6, 2 + (Math.log10(ele.data('amount') || 1) * 0.5)),
+                            'label': (ele: any) => {
+                                const count = ele.data('count');
+                                const amount = ele.data('amount');
+                                if (!amount) return '';
+                                const amtStr = amount >= 1000 ? `₹${(amount / 1000).toFixed(0)}k` : `₹${amount}`;
+                                return count > 1 ? `${count}x (${amtStr})` : amtStr;
+                            },
+                            'font-size': '9px',
+                            'color': '#94a3b8',
+                            'text-background-color': '#0f172a',
+                            'text-background-opacity': 0.7,
+                            'text-background-padding': '2px',
+                            'text-rotation': 'autorotate',
                         }
                     },
                     {
@@ -216,6 +229,7 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                             'border-color': '#22d3ee',
                             'overlay-color': '#22d3ee',
                             'overlay-opacity': 0.2,
+                            'label': 'data(label)',
                         } as any
                     }
                 ],
@@ -283,7 +297,7 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                 name: 'cola',
                 animate: true,
                 refresh: 2,
-                maxSimulationTime: 2000,
+                maxSimulationTime: 1200, // Reduced from 2000
                 ungrabifyWhileSimulating: false,
                 fit: isFirstLoad,
                 padding: 40,
