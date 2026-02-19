@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ShieldAlert, LayoutDashboard, Share2, FileText, Search, Settings, Database, Users } from 'lucide-react';
+import { ShieldAlert, LayoutDashboard, Share2, FileText, Search, Settings, Database, Users, Map } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
@@ -10,6 +10,7 @@ const routes = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Transactions', path: '/transactions', icon: FileText },
     { name: 'Network Graph', path: '/network', icon: Share2 },
+    { name: 'Live Map', path: '/map', icon: Map },
     { name: 'Reports', path: '/reports', icon: FileText },
     { name: 'Investigation', path: '/investigate', icon: Search },
     { name: 'Simulator', path: '/attack-simulator', icon: Database },
