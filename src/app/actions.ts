@@ -274,6 +274,32 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
         }
     });
 
+    // 🚨 CLUSTER RISK INHERITANCE: If one node is high risk, the whole cluster is high risk
+    // This ensures visually consistent "Fraud Rings" where all members are flagged
+    const clusterMaxRisk = new Map<string, number>();
+
+    // 1. Find max risk per cluster
+    nodes.forEach(node => {
+        if (node.data.clusterId && node.data.type === 'account') {
+            const currentMax = clusterMaxRisk.get(node.data.clusterId) || 0;
+            if (node.data.risk > currentMax) {
+                clusterMaxRisk.set(node.data.clusterId, node.data.risk);
+            }
+        }
+    });
+
+    // 2. Update all nodes in cluster to max risk
+    nodes.forEach(node => {
+        if (node.data.clusterId && node.data.type === 'account') {
+            const maxRisk = clusterMaxRisk.get(node.data.clusterId);
+            if (maxRisk && maxRisk > node.data.risk) {
+                node.data.risk = maxRisk;
+                // Update class for UI color to match new risk
+                node.classes = `${maxRisk > 80 ? 'critical-risk' : maxRisk > 50 ? 'high-risk' : maxRisk > 30 ? 'medium-risk' : ''} ${node.data.isHacker ? 'hacker-node' : ''} ${node.data.isVpn ? 'vpn-node' : ''}`.trim();
+            }
+        }
+    });
+
     // 4️⃣ ALERT GENERATION (Fan-In Pattern Detection)
     const alerts: any[] = [];
     const maxInDegreeVal = Math.max(...Array.from(inDegreeMap.values()), 0);
