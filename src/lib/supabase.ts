@@ -1,13 +1,8 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL ? 'Set' : 'Not Set');
-console.log('Supabase Key:', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'Set' : 'Not Set');
-
-// TODO: Remove hardcoded fallbacks after restarting the server to pick up env vars
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://lskduvcaahmhydaqvnjq.supabase.co';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_YFO_w48vUCJ1XoYJO_6z-w_wyvhgXhi';
-
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
 let _supabase: SupabaseClient | null = null;
 
