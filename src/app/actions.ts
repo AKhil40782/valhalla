@@ -167,12 +167,25 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                 const label = (accId.startsWith('SAL_') ? accId : profileMap.get(accountMap.get(accId)?.user_id)?.full_name) || accId;
                 const maskedLabel = forceUnmask ? label : (accId.startsWith('SAL_') ? maskAccountNumber(accId) : label);
 
+                // VPN / Proxy Detection (Simulation)
+                const userIps = ipMap.get(accId);
+                let isVpn = false;
+                if (userIps) {
+                    userIps.forEach(ip => {
+                        // Check for the "simulated" VPN IP or private ranges often used in these demos
+                        if (ip.startsWith('45.33') || ip.startsWith('192.168') || ip.startsWith('10.0')) {
+                            isVpn = true;
+                        }
+                    });
+                }
+
                 nodes.push({
                     data: {
                         id: accId,
                         label: maskedLabel,
                         type: 'account',
                         isHacker: profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker',
+                        isVpn: isVpn,
                         risk: finalRiskScore,
                         metrics: {
                             deviceReuse: maxDeviceReuse,
@@ -183,7 +196,7 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                             thresholdDodging
                         }
                     },
-                    classes: `${finalRiskScore > 80 ? 'critical-risk' : finalRiskScore > 50 ? 'high-risk' : finalRiskScore > 30 ? 'medium-risk' : ''} ${profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker' ? 'hacker-node' : ''}`.trim()
+                    classes: `${finalRiskScore > 80 ? 'critical-risk' : finalRiskScore > 50 ? 'high-risk' : finalRiskScore > 30 ? 'medium-risk' : ''} ${profileMap.get(accountMap.get(accId)?.user_id)?.role === 'hacker' ? 'hacker-node' : ''} ${isVpn ? 'vpn-node' : ''}`.trim()
                 });
                 processedNodes.add(accId);
             }

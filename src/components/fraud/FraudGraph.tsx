@@ -199,6 +199,17 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                         }
                     },
                     {
+                        selector: 'node.vpn-node',
+                        style: {
+                            'border-style': 'dashed',
+                            'border-color': '#f97316', // Orange-500
+                            'border-width': 4,
+                            'background-color': '#431407', // Brown-950
+                            'text-outline-color': '#f97316',
+                            'text-outline-width': 1,
+                        }
+                    },
+                    {
                         selector: 'node:selected',
                         style: {
                             'border-width': 4,
@@ -386,9 +397,15 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                             Risk: {getRiskBadge(tooltip.data.risk)}
                         </div>
                     )}
+                    {tooltip.data.isVpn && (
+                        <div className="flex items-center gap-1 mt-1 text-orange-400 font-bold">
+                            ⚠️ VPN DETECTED
+                        </div>
+                    )}
                 </div>
             )}
 
+            {/* Selected Node Panel */}
             {/* Selected Node Panel */}
             {selectedNode && (
                 <div className="absolute bottom-3 right-3 z-10 bg-slate-900/95 backdrop-blur p-4 rounded-lg border border-cyan-800 text-xs min-w-[280px] shadow-2xl animate-in slide-in-from-bottom-5">
@@ -444,6 +461,14 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                             </div>
                         )}
 
+                        {selectedNode.isVpn && (
+                            <div className="mb-2">
+                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-orange-950/30 border border-orange-900/50 text-orange-500 text-[10px] font-bold uppercase w-full justify-center shadow-[0_0_10px_rgba(249,115,22,0.2)] animate-pulse">
+                                    🛡️ SUSPICIOUS MARK: VPN / PROXY USE
+                                </span>
+                            </div>
+                        )}
+
                         {/* Risk Section */}
                         {selectedNode.risk !== undefined && (
                             <div className="bg-slate-800/50 p-2 rounded border border-slate-700">
@@ -494,6 +519,6 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
             <div className="absolute bottom-3 left-3 z-10 text-[10px] text-slate-600">
                 Scroll to zoom • Drag to pan • Click node to select
             </div>
-        </div>
+        </div >
     );
 }
