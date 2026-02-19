@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import cytoscape from 'cytoscape';
 // @ts-ignore
 import cola from 'cytoscape-cola';
@@ -17,6 +17,40 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const [selectedNode, setSelectedNode] = useState<any>(null);
     const [tooltip, setTooltip] = useState<{ x: number; y: number; data: any } | null>(null);
+    const [maxNodes, setMaxNodes] = useState(50);
+    const [riskFilter, setRiskFilter] = useState<'all' | 'high' | 'critical'>('all');
+    const [layoutMode, setLayoutMode] = useState<'force' | 'circle' | 'grid'>('force');
+
+    const filteredElements = useMemo(() => {
+        let nodes = elements.filter(e => !e.data.source); // Nodes
+        let edges = elements.filter(e => e.data.source);  // Edges
+
+        // 1. Risk Filter
+        if (riskFilter !== 'all') {
+            nodes = nodes.filter(n => {
+                const risk = n.data.riskScore || 0;
+                if (riskFilter === 'critical') return risk >= 80;
+                if (riskFilter === 'high') return risk >= 50;
+                return true;
+            });
+        }
+
+        // 2. Max Nodes (Top Risk)
+        // Sort by risk (desc) then by amount (desc)
+        nodes.sort((a, b) => {
+            const riskDiff = (b.data.riskScore || 0) - (a.data.riskScore || 0);
+            if (riskDiff !== 0) return riskDiff;
+            return (b.data.amount || 0) - (a.data.amount || 0);
+        });
+        nodes = nodes.slice(0, maxNodes);
+
+        const nodeIds = new Set(nodes.map(n => n.data.id));
+
+        // 3. Filter edges
+        edges = edges.filter(e => nodeIds.has(e.data.source) && nodeIds.has(e.data.target));
+
+        return [...nodes, ...edges];
+    }, [elements, maxNodes, riskFilter]);
 
     const cyRef = useRef<cytoscape.Core | null>(null);
 
@@ -272,13 +306,13 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
         // 🛠 SYNC ELEMENTS WITHOUT LOSING CAM
         try {
             const isFirstLoad = cy.elements().empty();
-            console.log(`[SalaarGraph] Syncing ${elements.length} elements. First load: ${isFirstLoad}`);
+            console.log(`[SalaarGraph] Syncing ${filteredElements.length} elements. First load: ${isFirstLoad}`);
 
             // Deduplicate incoming elements just in case server-side failed
             const uniqueElements: any[] = [];
             const seenIds = new Set();
 
-            elements.forEach(el => {
+            filteredElements.forEach(el => {
                 if (el.data && el.data.id) {
                     if (!seenIds.has(el.data.id)) {
                         uniqueElements.push(el);
@@ -294,16 +328,16 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
             cy.add(uniqueElements);
 
             const layout = cy.layout({
-                name: 'cola',
+                name: layoutMode === 'force' ? 'cola' : layoutMode,
                 animate: true,
                 refresh: 2,
-                maxSimulationTime: 1200, // Reduced from 2000
+                maxSimulationTime: 1500,
                 ungrabifyWhileSimulating: false,
                 fit: isFirstLoad,
                 padding: 40,
                 randomize: false,
-                nodeSpacing: function (node: any) { return 80; },
-                edgeLength: 220,
+                nodeSpacing: function (node: any) { return layoutMode === 'grid' ? 100 : 100; },
+                edgeLength: 250,
             } as any);
 
             layout.run();
@@ -314,7 +348,7 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
         } catch (err) {
             console.error("[SalaarGraph] Critical rendering error:", err);
         }
-    }, [elements, onNodeSelect]);
+    }, [filteredElements, onNodeSelect, layoutMode]);
 
     const getRiskBadge = (risk: number) => {
         if (risk >= 80) return <span className="px-1.5 py-0.5 text-[10px] rounded bg-red-500/20 text-red-400">CRITICAL</span>;
@@ -347,8 +381,43 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                 title="Download Graph Evidence"
             >
                 <Download size={16} className="group-hover:scale-110 transition-transform" />
-                <span className="text-xs font-semibold">Export Image</span>
+                <span className="text-xs font-semibold">Export</span>
             </button>
+
+            {/* View Controls */}
+            <div className="absolute top-3 right-32 z-10 flex gap-2">
+                <select
+                    value={maxNodes}
+                    onChange={(e) => setMaxNodes(Number(e.target.value))}
+                    className="h-9 px-2 bg-slate-900/90 border border-slate-700 rounded text-xs text-slate-300 outline-none focus:border-cyan-500"
+                >
+                    <option value={20}>20 Nodes</option>
+                    <option value={50}>50 Nodes</option>
+                    <option value={100}>100 Nodes</option>
+                    <option value={200}>200 Nodes</option>
+                    <option value={500}>500 Nodes</option>
+                </select>
+
+                <select
+                    value={riskFilter}
+                    onChange={(e) => setRiskFilter(e.target.value as any)}
+                    className="h-9 px-2 bg-slate-900/90 border border-slate-700 rounded text-xs text-slate-300 outline-none focus:border-cyan-500"
+                >
+                    <option value="all">All Risks</option>
+                    <option value="high">High & Crit</option>
+                    <option value="critical">Critical Only</option>
+                </select>
+
+                <select
+                    value={layoutMode}
+                    onChange={(e) => setLayoutMode(e.target.value as any)}
+                    className="h-9 px-2 bg-slate-900/90 border border-slate-700 rounded text-xs text-slate-300 outline-none focus:border-cyan-500"
+                >
+                    <option value="force">Physics</option>
+                    <option value="circle">Circle</option>
+                    <option value="grid">Grid</option>
+                </select>
+            </div>
 
             {/* Legend */}
             <div className="absolute top-3 left-3 z-10 bg-slate-900/90 backdrop-blur p-3 rounded-lg border border-slate-700 text-xs text-slate-400 space-y-2">
