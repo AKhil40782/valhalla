@@ -423,8 +423,8 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                         {/* Cluster Badge */}
                         {selectedNode.clusterLabel && (
                             <div className={`flex items-center gap-2 px-2 py-1.5 rounded border ${selectedNode.clusterRiskLevel === 'high' ? 'bg-red-950/30 border-red-800 text-red-400' :
-                                    selectedNode.clusterRiskLevel === 'medium' ? 'bg-amber-950/30 border-amber-800 text-amber-400' :
-                                        'bg-slate-800/50 border-slate-700 text-slate-400'
+                                selectedNode.clusterRiskLevel === 'medium' ? 'bg-amber-950/30 border-amber-800 text-amber-400' :
+                                    'bg-slate-800/50 border-slate-700 text-slate-400'
                                 }`}>
                                 <span className="text-lg">🔗</span>
                                 <div>
@@ -502,6 +502,22 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                                     </div>
                                     <div className="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
                                         <div className="h-full bg-violet-500 rounded-full transition-all" style={{ width: `${selectedNode.metrics.vpnPresence}%` }} />
+                                    </div>
+                                </div>
+
+                                {/* ML & Anomaly Scores */}
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 pt-2 border-t border-slate-800/50">
+                                    <div>
+                                        <span className="text-slate-500 block text-[9px] uppercase">🤖 ML Probability</span>
+                                        <span className={`font-bold ${(selectedNode.metrics.ml_score || 0) > 0.5 ? 'text-red-400' : 'text-slate-300'}`}>
+                                            {((selectedNode.metrics.ml_score || 0) * 100).toFixed(0)}%
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="text-slate-500 block text-[9px] uppercase">👽 Anomaly Score</span>
+                                        <span className={`font-bold ${(selectedNode.metrics.anomaly_score || 0) > 0.6 ? 'text-orange-400' : 'text-slate-300'}`}>
+                                            {((selectedNode.metrics.anomaly_score || 0) * 100).toFixed(0)}%
+                                        </span>
                                     </div>
                                 </div>
 

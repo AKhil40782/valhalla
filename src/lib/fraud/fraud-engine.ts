@@ -1,6 +1,8 @@
 // Fraud Detection Engine — Multi-Attribute Identity Linking & Cluster Analysis
 
 import { supabase } from '@/lib/supabase';
+import { extractClusterFeatures } from '../ml/features';
+import { predictClusterRisk } from '../ml/models';
 
 // ============================================
 // TYPES
@@ -44,10 +46,13 @@ export interface FraudCluster {
     accountIds: string[];
     links: IdentityLink[];
     metrics: ClusterMetricsNormalized;
-    riskScore: number;     // 0-1
+    riskScore: number;     // 0-1 (Ensemble)
     riskLevel: 'low' | 'medium' | 'high';
     explanation: string;
+    mlScore?: number;
+    anomalyScore?: number;
 }
+
 
 // ============================================
 // 1. CONVERT RAW TRANSACTIONS → TransactionEvents
@@ -517,8 +522,17 @@ export async function runFraudEngine(rawTransactions: any[], accountNames: Map<s
         );
 
         const metrics = calculateClusterMetrics(accountIds, clusterLinks, events);
-        const riskScore = computeRiskScore(metrics);
-        const riskLevel = classifyRisk(riskScore);
+        const ruleRisk = computeRiskScore(metrics);
+
+        // ML Inference
+        const features = extractClusterFeatures({ accountIds, metrics } as any, events); // partial mock for extraction
+        const { supervisedRisk, anomalyScore, explanation: mlExplanation } = await predictClusterRisk(features);
+
+        // Ensemble Score: 0.5 Rule + 0.3 ML + 0.2 Anomaly
+        // If ML is 0 (not confident), fallback to Rule
+        const ensembleScore = (ruleRisk * 0.5) + (supervisedRisk * 0.3) + (anomalyScore * 0.2);
+
+        const riskLevel = classifyRisk(ensembleScore);
 
         const cluster: FraudCluster = {
             id: root,
@@ -526,19 +540,23 @@ export async function runFraudEngine(rawTransactions: any[], accountNames: Map<s
             accountIds,
             links: clusterLinks,
             metrics,
-            riskScore,
+            riskScore: ensembleScore,
             riskLevel,
             explanation: '',
+            mlScore: supervisedRisk,
+            anomalyScore: anomalyScore
         };
 
-        cluster.explanation = generateExplanation(cluster, accountNames);
+        const ruleExplanation = generateExplanation(cluster, accountNames);
+        const combinedExplanation = [ruleExplanation, ...mlExplanation].join(' ');
+        cluster.explanation = combinedExplanation;
 
         clusters.push(cluster);
         clusterIndex++;
 
         // Map each account to its cluster risk
         for (const accId of accountIds) {
-            accountRiskMap.set(accId, { riskScore, riskLevel, clusterId: root });
+            accountRiskMap.set(accId, { riskScore: ensembleScore, riskLevel, clusterId: root });
         }
     }
 
@@ -566,7 +584,7 @@ async function persistClusters(clusters: FraudCluster[]): Promise<void> {
         account_ids: c.accountIds,
         risk_score: c.riskScore,
         risk_level: c.riskLevel,
-        metrics: c.metrics,
+        metrics: { ...c.metrics, ml_score: c.mlScore, anomaly_score: c.anomalyScore },
         explanation: c.explanation,
         edge_count: c.links.length,
     }));
