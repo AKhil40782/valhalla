@@ -777,7 +777,8 @@ export async function processUserTransaction(data: {
         await supabase.from('transactions').insert({
             id: txId,
             from_account_id: data.fromAccountId,
-            to_account_number: data.recipient,
+            to_account_id: receiverAccount?.id, // 👈 CRITICAL FIX: Link to receiver's UUID
+            to_account_number: receiverAccount?.account_number || data.recipient, // 👈 FIX: Use real number if found
             amount: data.amount,
             ip_address: data.forensics.ip,
             device_id: data.forensics.deviceId,
