@@ -146,12 +146,12 @@ export default function LiveMap({ transactions }: LiveMapProps) {
     const allPositions: [number, number][] = locationMap.map(loc => [loc.lat, loc.lon]);
 
     const getLineColor = (risk: string, isVpn: boolean) => {
-        if (isVpn) return '#a855f7';
+        if (isVpn) return '#7c3aed';
         switch (risk) {
-            case 'critical': return '#ef4444';
-            case 'high': return '#f97316';
-            case 'medium': return '#eab308';
-            default: return '#22d3ee80';
+            case 'critical': return '#dc2626';
+            case 'high': return '#ea580c';
+            case 'medium': return '#ca8a04';
+            default: return '#0891b2';
         }
     };
 
@@ -208,8 +208,8 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                         positions={[line.from, line.to]}
                         pathOptions={{
                             color: getLineColor(line.risk, line.isVpn),
-                            weight: 2,
-                            opacity: 0.6,
+                            weight: 3,
+                            opacity: 0.9,
                             dashArray: line.isVpn ? '8, 4' : undefined
                         }}
                     />
@@ -305,9 +305,9 @@ export default function LiveMap({ transactions }: LiveMapProps) {
                         key={`vpn-trace-${idx}`}
                         positions={[[tx.lat, tx.lon], [tx.ipLat!, tx.ipLon!]]}
                         pathOptions={{
-                            color: '#a855f7',
-                            weight: 1.5,
-                            opacity: 0.5,
+                            color: '#7c3aed',
+                            weight: 2.5,
+                            opacity: 0.8,
                             dashArray: '6, 6'
                         }}
                     />
