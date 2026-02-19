@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import cytoscape from 'cytoscape';
 // @ts-ignore
 import cola from 'cytoscape-cola';
-import { Download } from 'lucide-react';
+import { Download, Maximize2, Minimize2 } from 'lucide-react';
 
 cytoscape.use(cola);
 
@@ -20,6 +20,7 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
     const [maxNodes, setMaxNodes] = useState(50);
     const [riskFilter, setRiskFilter] = useState<'all' | 'high' | 'critical'>('all');
     const [layoutMode, setLayoutMode] = useState<'force' | 'circle' | 'grid'>('force');
+    const [isFullscreen, setIsFullscreen] = useState(false);
 
     const filteredElements = useMemo(() => {
         let nodes = elements.filter(e => !e.data.source); // Nodes
@@ -373,7 +374,7 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
     };
 
     return (
-        <div className="w-full h-full min-h-[400px] bg-slate-950/50 rounded-xl border border-slate-800 overflow-hidden relative">
+        <div className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : 'w-full h-full min-h-[400px] bg-slate-950/50 rounded-xl border border-slate-800 relative'} overflow-hidden transition-all duration-300`}>
             {/* Export Button */}
             <button
                 onClick={exportGraph}
@@ -417,6 +418,14 @@ export function FraudGraph({ elements, onNodeSelect }: FraudGraphProps) {
                     <option value="circle">Circle</option>
                     <option value="grid">Grid</option>
                 </select>
+
+                <button
+                    onClick={() => setIsFullscreen(!isFullscreen)}
+                    className="p-2 bg-slate-900/90 hover:bg-slate-800 text-cyan-400 rounded border border-slate-700 transition-all shadow-[0_0_10px_rgba(34,211,238,0.2)] h-9 w-9 flex items-center justify-center"
+                    title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                >
+                    {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
             </div>
 
             {/* Legend */}
