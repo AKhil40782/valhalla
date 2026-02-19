@@ -788,7 +788,8 @@ export async function processUserTransaction(data: {
             // Store intelligence to avoid re-fetching on read
             asn: asn,
             vpn_flag: vpnFlag,
-            device_fingerprint_id: data.forensics.deviceId ? `fp_${data.forensics.deviceId.substring(0, 12)}` : null
+            device_fingerprint_id: data.forensics.deviceId ? `fp_${data.forensics.deviceId.substring(0, 12)}` : null,
+            metadata: data.forensics // 🚀 Save full forensics (OS, Browser, Screen, Timezone)
         });
 
         // 3. Update Balances

@@ -23,6 +23,7 @@ interface Transaction {
     // Client-side enriched fields
     from_name?: string;
     to_name?: string;
+    metadata?: any; // JSONB
 }
 
 export default function UserDashboard() {
@@ -147,6 +148,26 @@ export default function UserDashboard() {
             location = `${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)}`;
         } catch (e) { console.log("GPS denied, using IP fallback later"); }
 
+        // 4. Enhanced Forensics (OS, Browser, Timezone)
+        let os = "Unknown OS";
+        let osVersion = "";
+        let browser = "Unknown Browser";
+        let browserVersion = "";
+
+        if (/Windows NT 10.0/.test(userAgent)) os = "Windows 10/11";
+        else if (/Windows NT 6.2/.test(userAgent)) os = "Windows 8";
+        else if (/Mac OS X ([0-9_]+)/.test(userAgent)) { os = "macOS"; osVersion = RegExp.$1.replace(/_/g, '.'); }
+        else if (/Android ([0-9.]+)/.test(userAgent)) { os = "Android"; osVersion = RegExp.$1; }
+        else if (/iPhone OS ([0-9_]+)/.test(userAgent)) { os = "iOS"; osVersion = RegExp.$1.replace(/_/g, '.'); }
+        else if (/Linux/.test(userAgent)) os = "Linux";
+
+        if (/Firefox\/([0-9.]+)/.test(userAgent)) { browser = "Firefox"; browserVersion = RegExp.$1; }
+        else if (/Chrome\/([0-9.]+)/.test(userAgent)) { browser = "Chrome"; browserVersion = RegExp.$1; }
+        else if (/Safari\/([0-9.]+)/.test(userAgent) && !/Chrome/.test(userAgent)) { browser = "Safari"; browserVersion = RegExp.$1; }
+        else if (/Edg\/([0-9.]+)/.test(userAgent)) { browser = "Edge"; browserVersion = RegExp.$1; }
+
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
         return {
             ip,
             ipv6,
@@ -154,6 +175,11 @@ export default function UserDashboard() {
             screenRes,
             language,
             location,
+            os,
+            osVersion,
+            browser,
+            browserVersion,
+            timezone,
             device: /Mobile|Android|iPhone/i.test(userAgent) ? "Mobile Device" : "Desktop/Laptop",
             deviceId: btoa(`${userAgent}-${screenRes}-${language}`).replace(/=/g, '') // Simple client-side hash
         };
@@ -193,6 +219,8 @@ export default function UserDashboard() {
             setSendLoading(false);
         }
     };
+
+    const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
 
     const openModal = () => {
         setSendModal(true);
@@ -299,16 +327,10 @@ export default function UserDashboard() {
                             {transactions.map(tx => {
                                 const isDebit = tx.from_account_id === account?.id;
                                 return (
-                                    <div key={tx.id} className="flex items-center justify-between py-3 border-b border-slate-700/50 last:border-0">
+                                    <div key={tx.id} onClick={() => setSelectedTx(tx)} className="cursor-pointer hover:bg-slate-800/50 transition-colors rounded-lg px-2 -mx-2 flex items-center justify-between py-3 border-b border-slate-700/50 last:border-0">
                                         <div>
                                             <div className="text-white font-medium">
-                                                {isDebit ? `To: ${tx.to_account_number || 'Unknown'}` : `From: ${tx.from_account_id ? 'Sender' : 'Unknown'}`}
-                                                {/* Better: If I had sender account number, I'd show it. But I only have IDs usually, unless joined. 
-                                                    Transaction table has to_account_number but maybe not from_account_number? 
-                                                    Let's check interface: it has to_account_number. Does it have from_account_number?
-                                                    I'll assume NO for now, but usually it should. 
-                                                    Wait, if I don't have sender number, I'll just say "Received".
-                                                */}
+                                                {isDebit ? `To: ${tx.to_name || tx.to_account_number || 'Unknown'}` : `From: ${tx.from_name || 'Unknown Sender'}`}
                                             </div>
                                             <div className="text-slate-500 text-xs">
                                                 {new Date(tx.timestamp).toLocaleString()}
@@ -324,6 +346,69 @@ export default function UserDashboard() {
                     )}
                 </div>
             </main>
+
+            {/* Transaction Details Modal */}
+            {selectedTx && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 to-blue-600"></div>
+                        <h3 className="text-xl font-bold mb-6 text-white flex items-center gap-2">
+                            <Shield className="text-cyan-400" size={24} /> Transaction Details
+                        </h3>
+
+                        <div className="space-y-4 text-sm">
+                            <div className="flex justify-between border-b border-slate-800 pb-2">
+                                <span className="text-slate-400">Transaction ID</span>
+                                <span className="font-mono text-xs text-slate-500">{selectedTx.id.slice(0, 8)}...</span>
+                            </div>
+                            <div className="flex justify-between border-b border-slate-800 pb-2">
+                                <span className="text-slate-400">Amount</span>
+                                <span className="font-bold text-white">₹{selectedTx.amount.toLocaleString()}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-slate-800 pb-2">
+                                <span className="text-slate-400">Date</span>
+                                <span className="text-slate-300">{new Date(selectedTx.timestamp).toLocaleString()}</span>
+                            </div>
+
+                            {selectedTx.metadata && (
+                                <div className="bg-slate-950 rounded-lg p-3 mt-4 border border-slate-800">
+                                    <h4 className="text-cyan-500 font-semibold mb-2 flex items-center gap-2">
+                                        <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse"></div>
+                                        Device Forensics
+                                    </h4>
+                                    <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-xs">
+                                        <div className="text-slate-500">OS System</div>
+                                        <div className="text-slate-300 font-mono">{selectedTx.metadata.os || 'Unknown'} {selectedTx.metadata.osVersion}</div>
+
+                                        <div className="text-slate-500">Browser</div>
+                                        <div className="text-slate-300 font-mono">{selectedTx.metadata.browser || 'Unknown'} {selectedTx.metadata.browserVersion}</div>
+
+                                        <div className="text-slate-500">Screen Res</div>
+                                        <div className="text-slate-300 font-mono">{selectedTx.metadata.screenRes || 'Unknown'}</div>
+
+                                        <div className="text-slate-500">Timezone</div>
+                                        <div className="text-slate-300 font-mono">{selectedTx.metadata.timezone || 'Unknown'}</div>
+
+                                        <div className="text-slate-500">IP Address</div>
+                                        <div className="text-slate-300 font-mono">{selectedTx.metadata.ip || 'Unknown'}</div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {!selectedTx.metadata && (
+                                <p className="text-center text-xs text-slate-600 italic py-2">No deep forensic data available for this transaction.</p>
+                            )}
+                        </div>
+
+                        <button
+                            onClick={() => setSelectedTx(null)}
+                            className="w-full mt-6 py-3 bg-slate-800 hover:bg-slate-700 rounded-lg font-semibold text-white transition-colors"
+                        >
+                            Close Details
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* Send Money Modal */}
             {sendModal && (
