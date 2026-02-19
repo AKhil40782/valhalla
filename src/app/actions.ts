@@ -207,8 +207,8 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
     // 🚀 BATCH IP RESOLUTION
     const ipCache = new Map<string, any>();
     const ipArray = Array.from(uniqueIpsToResolve);
-    // Limit to 20 to prevent timeout, others stay unknown
-    const ipsToFetch = ipArray.slice(0, 20);
+    // Limit to 5 to prevent rate-limiting and timeouts (was 20)
+    const ipsToFetch = ipArray.slice(0, 5);
 
     if (ipsToFetch.length > 0) {
         await Promise.all(ipsToFetch.map(async (ip) => {
@@ -921,7 +921,14 @@ async function getRealIpLocation(ip: string): Promise<{ lat: number, lon: number
             return { lat: 0, lon: 0, city: 'Private Network', isp: 'Local Network' };
         }
 
-        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,lat,lon,city,isp`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1500); // 1.5s timeout
+
+        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,message,lat,lon,city,isp`, {
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
         const data = await response.json();
 
         if (data.status === 'success') {
@@ -934,7 +941,7 @@ async function getRealIpLocation(ip: string): Promise<{ lat: number, lon: number
         }
         return null;
     } catch (e) {
-        console.warn("IP Geolocation Fetch Failed:", e);
+        // console.warn("IP Geolocation Fetch Failed/Timed Out:", e);
         return null;
     }
 }
