@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { seedFraudKnowledgeBase } from '@/lib/rag';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST() {
     try {
         const result = await seedFraudKnowledgeBase();
