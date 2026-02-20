@@ -112,3 +112,94 @@ export function calculateOverallRisk(metrics: Omit<FraudMetrics, 'overallRisk' |
         riskLevel
     };
 }
+
+// ============================================
+// Category 7: Statistical & Anomaly Detection
+// ============================================
+
+export interface PersonalBaseline {
+    avgAmount: number;
+    stdAmount: number;
+    avgFrequencyPerDay: number;
+    typicalHours: number[]; // 0-23
+    typicalLocations: string[];
+    txCount: number;
+}
+
+/**
+ * Analyze a transaction against a user's personal history baseline.
+ * Returns anomaly score 0-1 and flags.
+ */
+export function analyzePersonalHistory(
+    amount: number,
+    timestamp: Date,
+    location: string | null,
+    baseline: PersonalBaseline
+): { score: number; flags: string[] } {
+    if (baseline.txCount < 5) {
+        return { score: 0, flags: ['Insufficient history for personal baseline'] };
+    }
+
+    const flags: string[] = [];
+    let score = 0;
+
+    // 1. Amount Z-score against personal history
+    const amountZ = calculateZScore(amount, baseline.avgAmount, baseline.stdAmount);
+    if (Math.abs(amountZ) > 3) {
+        score += 0.35;
+        flags.push(`Amount ${amount.toLocaleString()} is ${Math.abs(amountZ).toFixed(1)}σ from user's average (${baseline.avgAmount.toLocaleString()})`);
+    } else if (Math.abs(amountZ) > 2) {
+        score += 0.2;
+        flags.push(`Unusual amount: ${Math.abs(amountZ).toFixed(1)}σ deviation from personal average`);
+    }
+
+    // 2. Time-of-day anomaly
+    const hour = timestamp.getHours();
+    if (baseline.typicalHours.length > 0 && !baseline.typicalHours.includes(hour)) {
+        score += 0.15;
+        flags.push(`Transaction at unusual hour (${hour}:00) — typical: ${baseline.typicalHours.join(', ')}:00`);
+    }
+
+    // 3. Location anomaly
+    if (location && baseline.typicalLocations.length > 0 && !baseline.typicalLocations.includes(location)) {
+        score += 0.2;
+        flags.push(`New location: ${location} — not in user's history`);
+    }
+
+    return { score: Math.min(1, score), flags };
+}
+
+/**
+ * Compare a transaction against population-level norms.
+ * Returns anomaly score 0-1.
+ */
+export function analyzePopulationAnomaly(
+    amount: number,
+    populationMean: number,
+    populationStd: number,
+    txCountPerDay: number,
+    avgPopulationFreq: number,
+    stdPopulationFreq: number
+): { score: number; flags: string[] } {
+    const flags: string[] = [];
+    let score = 0;
+
+    // Amount population Z-score
+    const amountZ = calculateZScore(amount, populationMean, populationStd);
+    if (Math.abs(amountZ) > 4) {
+        score += 0.3;
+        flags.push(`Amount is ${Math.abs(amountZ).toFixed(1)}σ from population average`);
+    } else if (Math.abs(amountZ) > 3) {
+        score += 0.15;
+        flags.push(`Amount deviation: ${Math.abs(amountZ).toFixed(1)}σ from population norm`);
+    }
+
+    // Frequency population Z-score
+    const freqZ = calculateZScore(txCountPerDay, avgPopulationFreq, stdPopulationFreq);
+    if (freqZ > 3) {
+        score += 0.25;
+        flags.push(`Transaction frequency ${txCountPerDay}/day is ${freqZ.toFixed(1)}σ above population average`);
+    }
+
+    return { score: Math.min(1, score), flags };
+}

@@ -1,8 +1,11 @@
 // Fraud Detection Engine — Multi-Attribute Identity Linking & Cluster Analysis
+// Categories: Temporal Coordination, Money Flow, Network, Automation, Statistical, Physical, Identity
 
 import { supabase } from '@/lib/supabase';
 import { extractClusterFeatures } from '../ml/features';
 import { predictClusterRisk } from '../ml/models';
+import { calculateBiometricAnomalyScore, BiometricSignature } from './biometrics';
+import { analyzeSessionBehaviour, SessionBehaviourSignature } from './session-tracker';
 
 // ============================================
 // TYPES
@@ -38,6 +41,20 @@ export interface ClusterMetricsNormalized {
     vpnPresenceScore: number;        // 0-1
     timeSyncScore: number;           // 0-1
     graphDensityScore: number;       // 0-1
+    // Category 3: Temporal Coordination
+    burstWindowScore: number;        // 0-1 (>3 txs in 60s)
+    synchronizedActivityScore: number; // 0-1 (same-second precision)
+    // Category 4: Money Flow Structure
+    funnelScore: number;             // 0-1 (high fan-in, single fan-out)
+    circularFlowScore: number;       // 0-1 (A→B→C→A cycles)
+    passThruScore: number;           // 0-1 (arrive + leave < 5min)
+    // Category 6: Automation/Script
+    automationScore: number;         // 0-1 (identical intervals, fixed amounts)
+    // Category 8: Physical Consistency
+    physicalConsistencyScore: number; // 0-1 (simultaneous conflicting locations)
+    // Category 1-2: Biometrics & Session (per-transaction, averaged per cluster)
+    avgBiometricScore: number;       // 0-1
+    avgSessionScore: number;         // 0-1
 }
 
 export interface FraudCluster {
@@ -373,6 +390,21 @@ function calculateClusterMetrics(
     // Power curve: even moderate density is suspicious
     const graphDensityScore = Math.min(1, Math.pow(rawDensity, 0.7));
 
+    // --- Category 3: Temporal Burst & Synchronization ---
+    const { burstWindowScore, synchronizedActivityScore } = analyzeTemporalCoordination(clusterEvents);
+
+    // --- Category 4: Money Flow Structure ---
+    const { funnelScore, circularFlowScore, passThruScore } = analyzeMoneyFlowStructure(clusterEvents);
+
+    // --- Category 6: Automation/Script Detection ---
+    const automationScore = detectAutomationPatterns(clusterEvents);
+
+    // --- Category 8: Physical Consistency ---
+    const physicalConsistencyScore = analyzePhysicalConsistency(clusterEvents);
+
+    // --- Categories 1-2: Biometric & Session (averaged from metadata if available) ---
+    const { avgBiometricScore, avgSessionScore } = analyzeClusterBiometricsAndSessions(allEvents, accountSet);
+
     return {
         fingerprintReuseScore,
         deviceIdReuseScore,
@@ -380,25 +412,285 @@ function calculateClusterMetrics(
         vpnPresenceScore,
         timeSyncScore,
         graphDensityScore,
+        burstWindowScore,
+        synchronizedActivityScore,
+        funnelScore,
+        circularFlowScore,
+        passThruScore,
+        automationScore,
+        physicalConsistencyScore,
+        avgBiometricScore,
+        avgSessionScore,
     };
 }
 
 // ============================================
-// 6. RISK SCORING
+// CATEGORY 3: TEMPORAL COORDINATION ANALYSIS
+// ============================================
+
+function analyzeTemporalCoordination(events: TransactionEvent[]): {
+    burstWindowScore: number;
+    synchronizedActivityScore: number;
+} {
+    if (events.length < 2) return { burstWindowScore: 0, synchronizedActivityScore: 0 };
+
+    const timestamps = events.map(e => new Date(e.timestamp).getTime()).sort((a, b) => a - b);
+
+    // Burst windows: count clusters of >3 txs within 60 seconds
+    let burstWindows = 0;
+    for (let i = 0; i < timestamps.length; i++) {
+        let count = 1;
+        for (let j = i + 1; j < timestamps.length; j++) {
+            if (timestamps[j] - timestamps[i] <= 60000) count++;
+            else break;
+        }
+        if (count >= 3) burstWindows++;
+    }
+    const burstWindowScore = Math.min(1, burstWindows / 3);
+
+    // Synchronized activity: same-second precision (< 1000ms apart)
+    let syncPairs = 0;
+    const uniqueAccounts = new Set(events.map(e => e.account_id));
+    if (uniqueAccounts.size >= 2) {
+        for (let i = 0; i < events.length; i++) {
+            for (let j = i + 1; j < events.length; j++) {
+                if (events[i].account_id === events[j].account_id) continue;
+                const diff = Math.abs(new Date(events[i].timestamp).getTime() - new Date(events[j].timestamp).getTime());
+                if (diff < 1000) syncPairs++;
+            }
+        }
+    }
+    const synchronizedActivityScore = Math.min(1, syncPairs / 2);
+
+    return { burstWindowScore, synchronizedActivityScore };
+}
+
+// ============================================
+// CATEGORY 4: MONEY FLOW STRUCTURE ANALYSIS
+// ============================================
+
+function analyzeMoneyFlowStructure(events: TransactionEvent[]): {
+    funnelScore: number;
+    circularFlowScore: number;
+    passThruScore: number;
+} {
+    if (events.length < 2) return { funnelScore: 0, circularFlowScore: 0, passThruScore: 0 };
+
+    // Build directed edge map
+    const inDegree = new Map<string, number>();
+    const outDegree = new Map<string, number>();
+    const edges: { from: string; to: string; amount: number; time: number }[] = [];
+
+    for (const ev of events) {
+        outDegree.set(ev.account_id, (outDegree.get(ev.account_id) || 0) + 1);
+        if (ev.to_account_id) {
+            inDegree.set(ev.to_account_id, (inDegree.get(ev.to_account_id) || 0) + 1);
+        }
+        edges.push({
+            from: ev.account_id,
+            to: ev.to_account_id,
+            amount: ev.amount,
+            time: new Date(ev.timestamp).getTime()
+        });
+    }
+
+    // Funnel: accounts with high fan-in but single/low fan-out
+    let funnelCount = 0;
+    for (const [acc, inCount] of inDegree) {
+        const outCount = outDegree.get(acc) || 0;
+        if (inCount >= 3 && outCount <= 1) funnelCount++;
+    }
+    const funnelScore = Math.min(1, funnelCount / 2);
+
+    // Circular flows: detect A→B→C→A (depth-3 cycles)
+    const adjacency = new Map<string, Set<string>>();
+    for (const edge of edges) {
+        if (!adjacency.has(edge.from)) adjacency.set(edge.from, new Set());
+        adjacency.get(edge.from)!.add(edge.to);
+    }
+    let cycles = 0;
+    for (const [a, neighbors] of adjacency) {
+        for (const b of neighbors) {
+            const bNeighbors = adjacency.get(b);
+            if (!bNeighbors) continue;
+            for (const c of bNeighbors) {
+                if (c === a) { cycles++; continue; } // A→B→A (2-cycle)
+                const cNeighbors = adjacency.get(c);
+                if (cNeighbors?.has(a)) cycles++; // A→B→C→A (3-cycle)
+            }
+        }
+    }
+    const circularFlowScore = Math.min(1, cycles / 2);
+
+    // Pass-through: money arriving and leaving within 5 minutes
+    let passThruCount = 0;
+    const PASS_THRU_WINDOW = 5 * 60 * 1000;
+    const incomingByAccount = new Map<string, number[]>();
+    const outgoingByAccount = new Map<string, number[]>();
+
+    for (const edge of edges) {
+        if (!outgoingByAccount.has(edge.from)) outgoingByAccount.set(edge.from, []);
+        outgoingByAccount.get(edge.from)!.push(edge.time);
+        if (edge.to) {
+            if (!incomingByAccount.has(edge.to)) incomingByAccount.set(edge.to, []);
+            incomingByAccount.get(edge.to)!.push(edge.time);
+        }
+    }
+
+    for (const [account, inTimes] of incomingByAccount) {
+        const outTimes = outgoingByAccount.get(account) || [];
+        for (const inTime of inTimes) {
+            for (const outTime of outTimes) {
+                if (outTime > inTime && outTime - inTime < PASS_THRU_WINDOW) {
+                    passThruCount++;
+                }
+            }
+        }
+    }
+    const passThruScore = Math.min(1, passThruCount / 3);
+
+    return { funnelScore, circularFlowScore, passThruScore };
+}
+
+// ============================================
+// CATEGORY 6: AUTOMATION / SCRIPT DETECTION
+// ============================================
+
+function detectAutomationPatterns(events: TransactionEvent[]): number {
+    if (events.length < 3) return 0;
+
+    let score = 0;
+
+    // Sort by time
+    const sorted = [...events].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    // 1. Identical time intervals (< 5% deviation)
+    const intervals: number[] = [];
+    for (let i = 1; i < sorted.length; i++) {
+        intervals.push(new Date(sorted[i].timestamp).getTime() - new Date(sorted[i - 1].timestamp).getTime());
+    }
+    if (intervals.length >= 2) {
+        const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        if (avgInterval > 0) {
+            const variance = intervals.reduce((sum, v) => sum + Math.pow(v - avgInterval, 2), 0) / intervals.length;
+            const coeffOfVariation = Math.sqrt(variance) / avgInterval;
+            if (coeffOfVariation < 0.05) {
+                score += 0.4; // Nearly identical intervals
+            } else if (coeffOfVariation < 0.15) {
+                score += 0.2; // Suspiciously regular
+            }
+        }
+    }
+
+    // 2. Fixed/Identical amounts
+    const amounts = sorted.map(e => e.amount);
+    const uniqueAmounts = new Set(amounts);
+    const amountRepeatRatio = 1 - (uniqueAmounts.size / amounts.length);
+    if (amountRepeatRatio > 0.7 && amounts.length >= 3) {
+        score += 0.3; // >70% identical amounts
+    } else if (amountRepeatRatio > 0.5) {
+        score += 0.15;
+    }
+
+    // 3. Sub-second transaction completion (extreme speed)
+    for (let i = 1; i < sorted.length; i++) {
+        const gap = new Date(sorted[i].timestamp).getTime() - new Date(sorted[i - 1].timestamp).getTime();
+        if (gap < 500 && gap > 0) {
+            score += 0.15;
+            break; // One instance is enough
+        }
+    }
+
+    // 4. Perfect consistency — zero variance in amount AND time
+    if (intervals.length >= 3 && amountRepeatRatio > 0.9) {
+        const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        if (avgInterval > 0) {
+            const variance = intervals.reduce((sum, v) => sum + Math.pow(v - avgInterval, 2), 0) / intervals.length;
+            if (Math.sqrt(variance) / avgInterval < 0.03) {
+                score += 0.2; // Perfect dual-consistency = almost certainly automated
+            }
+        }
+    }
+
+    return Math.min(1, score);
+}
+
+// ============================================
+// CATEGORY 8: PHYSICAL CONSISTENCY
+// ============================================
+
+function analyzePhysicalConsistency(events: TransactionEvent[]): number {
+    // Look for simultaneous transactions from different IPs
+    // (already have impossible travel in detection.ts; this checks within-cluster)
+    if (events.length < 2) return 0;
+
+    let conflictCount = 0;
+    const sorted = [...events].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    for (let i = 0; i < sorted.length; i++) {
+        for (let j = i + 1; j < sorted.length; j++) {
+            const timeDiff = Math.abs(new Date(sorted[j].timestamp).getTime() - new Date(sorted[i].timestamp).getTime());
+            if (timeDiff > 60000) break; // Only check within 1 min window
+
+            // Same account, different IPs
+            if (sorted[i].account_id === sorted[j].account_id &&
+                sorted[i].ip_address && sorted[j].ip_address &&
+                sorted[i].ip_address !== sorted[j].ip_address) {
+                conflictCount++;
+            }
+        }
+    }
+
+    return Math.min(1, conflictCount / 2);
+}
+
+// ============================================
+// CATEGORIES 1-2: BIOMETRIC & SESSION ANALYSIS (per cluster)
+// ============================================
+
+function analyzeClusterBiometricsAndSessions(
+    allEvents: TransactionEvent[],
+    accountSet: Set<string>
+): { avgBiometricScore: number; avgSessionScore: number } {
+    // Note: in a real implementation, we'd query metadata from the transactions table.
+    // For now, this returns 0s — the scores are populated per-transaction in processUserTransaction.
+    // When the engine runs, it can average the per-tx scores stored in metadata.
+    return { avgBiometricScore: 0, avgSessionScore: 0 };
+}
+
+// ============================================
+// 6. RISK SCORING (EXPANDED — 10 CATEGORIES)
 // ============================================
 
 function computeRiskScore(metrics: ClusterMetricsNormalized): number {
-    // Base weighted formula (includes deviceId which was missing before)
+    // Expanded weighted formula covering all categories
     const base = (
-        metrics.fingerprintReuseScore * 0.25 +
-        metrics.timeSyncScore * 0.20 +
-        metrics.ipSubnetAsnReuseScore * 0.15 +
-        metrics.deviceIdReuseScore * 0.15 +
-        metrics.graphDensityScore * 0.10 +
-        metrics.vpnPresenceScore * 0.15
+        // Identity & Infrastructure (Cat 9) — original signals
+        metrics.fingerprintReuseScore * 0.12 +
+        metrics.deviceIdReuseScore * 0.08 +
+        metrics.ipSubnetAsnReuseScore * 0.07 +
+        metrics.vpnPresenceScore * 0.07 +
+        // Temporal Coordination (Cat 3)
+        metrics.timeSyncScore * 0.08 +
+        metrics.burstWindowScore * 0.06 +
+        metrics.synchronizedActivityScore * 0.06 +
+        // Network Relationships (Cat 5)
+        metrics.graphDensityScore * 0.06 +
+        // Money Flow Structure (Cat 4)
+        metrics.funnelScore * 0.05 +
+        metrics.circularFlowScore * 0.06 +
+        metrics.passThruScore * 0.04 +
+        // Automation/Script (Cat 6)
+        metrics.automationScore * 0.08 +
+        // Physical Consistency (Cat 8)
+        metrics.physicalConsistencyScore * 0.05 +
+        // Behavioral Biometrics (Cat 1)
+        metrics.avgBiometricScore * 0.06 +
+        // Session Behaviour (Cat 2)
+        metrics.avgSessionScore * 0.06
     );
 
-    // 🔥 Multi-signal amplification: when 3+ signals fire, it's very likely fraud
+    // 🔥 Multi-signal amplification (Cat 10): when 4+ signals fire, it's very likely fraud
     const activeSignals = [
         metrics.fingerprintReuseScore > 0.3,
         metrics.deviceIdReuseScore > 0.3,
@@ -406,9 +698,21 @@ function computeRiskScore(metrics: ClusterMetricsNormalized): number {
         metrics.ipSubnetAsnReuseScore > 0.3,
         metrics.vpnPresenceScore > 0.3,
         metrics.graphDensityScore > 0.5,
+        metrics.burstWindowScore > 0.3,
+        metrics.synchronizedActivityScore > 0.3,
+        metrics.funnelScore > 0.3,
+        metrics.circularFlowScore > 0.3,
+        metrics.automationScore > 0.3,
+        metrics.physicalConsistencyScore > 0.3,
+        metrics.avgBiometricScore > 0.3,
+        metrics.avgSessionScore > 0.3,
     ].filter(Boolean).length;
 
-    const amplification = activeSignals >= 4 ? 0.25 : activeSignals >= 3 ? 0.15 : activeSignals >= 2 ? 0.05 : 0;
+    const amplification = activeSignals >= 6 ? 0.30
+        : activeSignals >= 4 ? 0.20
+            : activeSignals >= 3 ? 0.12
+                : activeSignals >= 2 ? 0.05
+                    : 0;
 
     return Math.min(1, base + amplification);
 }
@@ -467,7 +771,7 @@ function generateExplanation(
         parts.push('This pattern warrants closer investigation for potential coordination.');
     }
 
-    // Key metrics
+    // Key metrics — expanded with all categories
     const m = cluster.metrics;
     const metricDetails: string[] = [];
     if (m.fingerprintReuseScore > 0) metricDetails.push(`Fingerprint Reuse: ${(m.fingerprintReuseScore * 100).toFixed(0)}%`);
@@ -475,6 +779,16 @@ function generateExplanation(
     if (m.ipSubnetAsnReuseScore > 0) metricDetails.push(`Network Reuse: ${(m.ipSubnetAsnReuseScore * 100).toFixed(0)}%`);
     if (m.graphDensityScore > 0) metricDetails.push(`Graph Density: ${(m.graphDensityScore * 100).toFixed(0)}%`);
     if (m.vpnPresenceScore > 0) metricDetails.push(`VPN Presence: ${(m.vpnPresenceScore * 100).toFixed(0)}%`);
+    // New category metrics
+    if (m.burstWindowScore > 0) metricDetails.push(`Burst Activity: ${(m.burstWindowScore * 100).toFixed(0)}%`);
+    if (m.synchronizedActivityScore > 0) metricDetails.push(`Synchronized: ${(m.synchronizedActivityScore * 100).toFixed(0)}%`);
+    if (m.funnelScore > 0) metricDetails.push(`Funnel Pattern: ${(m.funnelScore * 100).toFixed(0)}%`);
+    if (m.circularFlowScore > 0) metricDetails.push(`Circular Flow: ${(m.circularFlowScore * 100).toFixed(0)}%`);
+    if (m.passThruScore > 0) metricDetails.push(`Pass-Through: ${(m.passThruScore * 100).toFixed(0)}%`);
+    if (m.automationScore > 0) metricDetails.push(`Automation: ${(m.automationScore * 100).toFixed(0)}%`);
+    if (m.physicalConsistencyScore > 0) metricDetails.push(`Physical Conflict: ${(m.physicalConsistencyScore * 100).toFixed(0)}%`);
+    if (m.avgBiometricScore > 0) metricDetails.push(`Biometric Anomaly: ${(m.avgBiometricScore * 100).toFixed(0)}%`);
+    if (m.avgSessionScore > 0) metricDetails.push(`Session Anomaly: ${(m.avgSessionScore * 100).toFixed(0)}%`);
 
     if (metricDetails.length > 0) {
         parts.push(`Metrics: ${metricDetails.join(' | ')}.`);

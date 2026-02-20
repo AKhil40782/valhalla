@@ -434,7 +434,7 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
             // VPN Detection ALSO for DB-stored ASN
             const ispLower = ispName.toLowerCase();
             const isKnownVpnIp = rawIp.startsWith('45.33') || rawIp.startsWith('45.90') || rawIp.startsWith('185.') || rawIp.startsWith('10.0');
-            const isVpnIsp = ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy') || ispLower.includes('zenex') || ispLower.includes('digitalocean') || ispLower.includes('5ive') || ispLower.includes('datacenter');
+            const isVpnIsp = ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy') || ispLower.includes('zenex') || ispLower.includes('digitalocean') || ispLower.includes('5ive') || ispLower.includes('datacenter') || ispLower.includes('gthost') || ispLower.includes('server') || ispLower.includes('dedicated');
             if (isKnownVpnIp || isVpnIsp) {
                 isVpnTransaction = true;
             }
@@ -447,7 +447,7 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
 
                 const ispLower = ispName.toLowerCase();
                 const isKnownVpnIp = rawIp.startsWith('45.33') || rawIp.startsWith('45.90') || rawIp.startsWith('185.') || rawIp.startsWith('10.0');
-                const isVpnIsp = ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy') || ispLower.includes('zenex') || ispLower.includes('digitalocean') || ispLower.includes('5ive') || ispLower.includes('datacenter');
+                const isVpnIsp = ispLower.includes('vpn') || ispLower.includes('cloud') || ispLower.includes('hosting') || ispLower.includes('proxy') || ispLower.includes('zenex') || ispLower.includes('digitalocean') || ispLower.includes('5ive') || ispLower.includes('datacenter') || ispLower.includes('gthost') || ispLower.includes('server') || ispLower.includes('dedicated');
                 if (isKnownVpnIp || isVpnIsp) {
                     isVpnTransaction = true;
                 }
@@ -487,7 +487,8 @@ export async function getRealFraudData(requesterId?: string, forceUnmask: boolea
                 ipCity: ipCity,
                 ipLat: ipLat,
                 ipLon: ipLon,
-                macAddress: tx.device_id ? `MAC-${tx.device_id.substring(0, 2)}...` : 'N/A'
+                macAddress: tx.device_id ? `MAC-${tx.device_id.substring(0, 2)}...` : 'N/A',
+                fraudScores: tx.metadata?.fraud_scores || null,
             }
         };
     });
@@ -820,6 +821,44 @@ export async function processUserTransaction(data: {
             }
         } catch (e) { console.error("IP Lookup Failed", e); }
 
+        // 🧠 Category 1-2: Run Biometric & Session Analysis (server-side scoring)
+        let biometricScore = 0;
+        let biometricFlags: string[] = [];
+        let sessionScore = 0;
+        let sessionFlags: string[] = [];
+
+        try {
+            if (data.forensics.biometrics) {
+                const { calculateBiometricAnomalyScore } = await import('@/lib/fraud/biometrics');
+                const result = calculateBiometricAnomalyScore(data.forensics.biometrics);
+                biometricScore = result.score;
+                biometricFlags = result.flags;
+                if (biometricScore > 0.3) {
+                    console.log(`🧠 [BIOMETRIC] Anomaly detected: ${biometricScore.toFixed(2)}`, biometricFlags);
+                }
+            }
+            if (data.forensics.session) {
+                const { analyzeSessionBehaviour } = await import('@/lib/fraud/session-tracker');
+                const result = analyzeSessionBehaviour(data.forensics.session);
+                sessionScore = result.score;
+                sessionFlags = result.flags;
+                if (sessionScore > 0.3) {
+                    console.log(`🧠 [SESSION] Anomaly detected: ${sessionScore.toFixed(2)}`, sessionFlags);
+                }
+            }
+        } catch (e) { console.error('Biometric/Session analysis error:', e); }
+
+        // Build enriched metadata with analysis scores
+        const enrichedMetadata = {
+            ...data.forensics,
+            fraud_scores: {
+                biometricScore,
+                biometricFlags,
+                sessionScore,
+                sessionFlags,
+            }
+        };
+
         await supabase.from('transactions').insert({
             id: txId,
             from_account_id: data.fromAccountId,
@@ -838,7 +877,7 @@ export async function processUserTransaction(data: {
             ip_lon: ipLon,
             ip_city: ipCityResolved,
             device_fingerprint_id: data.forensics.deviceId ? `fp_${data.forensics.deviceId.substring(0, 12)}` : null,
-            metadata: data.forensics // 🚀 Save full forensics (OS, Browser, Screen, Timezone)
+            metadata: enrichedMetadata // 🚀 Save full forensics + fraud analysis scores
         });
 
         // 3. Update Balances
@@ -847,7 +886,101 @@ export async function processUserTransaction(data: {
             await supabase.from('accounts').update({ balance: receiverAccount.balance + data.amount }).eq('id', receiverAccount.id);
         }
 
-        // 4. 🚨 RUN FRAUD DETECTION
+        // 4. 🧪 Update Behavior Profile with REAL biometric data
+        try {
+            if (!senderAccount.is_simulated) {
+                const bio = data.forensics?.biometrics;
+                const realMouseSpeed = bio?.mouseSpeed || null;
+                const realClickCount = bio?.clickCount || null;
+                const realInteractionDuration = bio?.interactionDuration || null; // ms
+                const realTypingSpeed = bio?.typingSpeed || null;
+                const txHour = new Date().getHours();
+
+                // Build anomaly flags from real detection
+                const anomalyObj: Record<string, boolean> = {};
+                if (vpnFlag) anomalyObj.vpn_detected = true;
+                if (biometricScore > 0.5) anomalyObj.biometric_anomaly = true;
+                if (sessionScore > 0.5) anomalyObj.session_anomaly = true;
+                for (const f of biometricFlags) anomalyObj[f.replace(/\s+/g, '_').toLowerCase()] = true;
+                for (const f of sessionFlags) anomalyObj[f.replace(/\s+/g, '_').toLowerCase()] = true;
+
+                // Get existing profile
+                const { data: existingProfile } = await supabase
+                    .from('user_behavior_profiles')
+                    .select('total_transactions, total_sessions, avg_transaction_time_ms, avg_clicks_per_session, avg_mouse_speed, anomaly_flags')
+                    .eq('account_id', data.fromAccountId)
+                    .maybeSingle();
+
+                if (existingProfile) {
+                    const n = existingProfile.total_transactions || 0;
+                    const sessions = existingProfile.total_sessions || 0;
+
+                    // Running average: newAvg = (oldAvg * n + newValue) / (n + 1)
+                    const newAvgTxTime = realInteractionDuration != null
+                        ? Math.round(((existingProfile.avg_transaction_time_ms || 0) * n + realInteractionDuration) / (n + 1))
+                        : existingProfile.avg_transaction_time_ms;
+
+                    const newAvgClicks = realClickCount != null
+                        ? Math.round(((existingProfile.avg_clicks_per_session || 0) * sessions + realClickCount) / (sessions + 1))
+                        : existingProfile.avg_clicks_per_session;
+
+                    const newAvgMouseSpeed = realMouseSpeed != null
+                        ? Math.round(((existingProfile.avg_mouse_speed || 0) * sessions + realMouseSpeed) / (sessions + 1) * 10) / 10
+                        : existingProfile.avg_mouse_speed;
+
+                    // Merge anomaly flags
+                    const mergedFlags = { ...(existingProfile.anomaly_flags || {}), ...anomalyObj };
+
+                    await supabase.from('user_behavior_profiles').update({
+                        total_transactions: n + 1,
+                        total_sessions: sessions + 1,
+                        last_active_at: timestamp,
+                        avg_transaction_time_ms: newAvgTxTime,
+                        avg_clicks_per_session: newAvgClicks,
+                        avg_mouse_speed: newAvgMouseSpeed,
+                        typical_login_hour: txHour,
+                        typical_device: data.forensics.device || 'Unknown',
+                        typical_ip_subnet: data.forensics.ip || '0.0.0.0',
+                        risk_score: senderAccount.risk_score || 0,
+                        risk_level: (senderAccount.risk_score || 0) >= 80 ? 'CRITICAL'
+                            : (senderAccount.risk_score || 0) >= 60 ? 'HIGH'
+                                : (senderAccount.risk_score || 0) >= 30 ? 'MEDIUM'
+                                    : 'LOW',
+                        anomaly_flags: mergedFlags,
+                        updated_at: timestamp,
+                    }).eq('account_id', data.fromAccountId);
+                } else {
+                    // No profile yet — create one with real data
+                    await supabase.from('user_behavior_profiles').insert({
+                        account_id: data.fromAccountId,
+                        user_name: senderAccount.virtual_name || senderAccount.account_number,
+                        risk_score: senderAccount.risk_score || 0,
+                        risk_level: (senderAccount.risk_score || 0) >= 80 ? 'CRITICAL'
+                            : (senderAccount.risk_score || 0) >= 60 ? 'HIGH'
+                                : (senderAccount.risk_score || 0) >= 30 ? 'MEDIUM'
+                                    : 'LOW',
+                        avg_transaction_time_ms: realInteractionDuration || 3000,
+                        avg_clicks_per_session: realClickCount || 10,
+                        avg_mouse_speed: realMouseSpeed || 600,
+                        total_transactions: 1,
+                        total_sessions: 1,
+                        last_active_at: timestamp,
+                        typical_login_hour: txHour,
+                        typical_device: data.forensics.device || 'Unknown',
+                        typical_ip_subnet: data.forensics.ip || '0.0.0.0',
+                        anomaly_flags: Object.keys(anomalyObj).length > 0 ? anomalyObj : {},
+                    });
+                }
+
+                console.log('📊 [BEHAVIOR] Updated profile with real biometrics:', {
+                    mouseSpeed: realMouseSpeed,
+                    clickCount: realClickCount,
+                    interactionDuration: realInteractionDuration,
+                });
+            }
+        } catch (e) { console.error('Behavior profile update error:', e); }
+
+        // 5. 🚨 RUN FRAUD DETECTION
         await runFraudDetection({
             fromId: data.fromAccountId,
             toAccount: data.recipient,
@@ -985,9 +1118,11 @@ async function getRealIpLocation(ip: string): Promise<{ lat: number, lon: number
             }
         } catch (err) {
             // Fallback to ipwho.is if ip-api fails
-            // console.log("Falling back to ipwho.is");
             try {
-                const fbResponse = await fetch(`http://ipwho.is/${ip}`);
+                const fbController = new AbortController();
+                const fbTimeout = setTimeout(() => fbController.abort(), 2000);
+                const fbResponse = await fetch(`http://ipwho.is/${ip}`, { signal: fbController.signal });
+                clearTimeout(fbTimeout);
                 const fbData = await fbResponse.json();
                 if (fbData.success) {
                     return { lat: fbData.latitude, lon: fbData.longitude, city: fbData.city, isp: fbData.connection?.isp || fbData.isp };
@@ -1288,3 +1423,288 @@ export async function saveTransactionsBatch(transactions: any[]) {
     return { success: true };
 }
 
+// ============================================
+// DEVICE BINDING & STEP-UP VERIFICATION
+// ============================================
+
+import { sendDeviceOTP, verifyOTP } from '@/lib/security/otp-service';
+import { evaluateDeviceRisk, logDeviceSecurityEvent } from '@/lib/security/device-risk';
+import { sendEmail } from '@/lib/notifications/email';
+
+/**
+ * Check if a device is trusted for a given user.
+ * Returns whether the device is trusted and whether OTP is required.
+ */
+export async function checkDeviceTrust(
+    userId: string,
+    deviceHash: string,
+    deviceName: string,
+    ipAddress: string,
+    suspiciousFlags: string[]
+): Promise<{ trusted: boolean; requiresOTP: boolean; deviceId?: string }> {
+    // Log the login attempt
+    await logDeviceSecurityEvent(userId, 'device_login', deviceHash, ipAddress, {
+        deviceName,
+        suspiciousFlags,
+    });
+
+    // If suspicious environment detected, always require OTP
+    if (suspiciousFlags.length > 0) {
+        await logDeviceSecurityEvent(userId, 'suspicious_environment', deviceHash, ipAddress, {
+            flags: suspiciousFlags,
+        });
+        return { trusted: false, requiresOTP: true };
+    }
+
+    // Check if device exists and is trusted
+    const { data: device } = await supabase
+        .from('trusted_devices')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('device_hash', deviceHash)
+        .eq('trusted_status', true)
+        .single();
+
+    if (device) {
+        // Device is trusted — update last seen
+        await supabase
+            .from('trusted_devices')
+            .update({ last_seen: new Date().toISOString(), ip_first_seen: ipAddress })
+            .eq('id', device.id);
+
+        return { trusted: true, requiresOTP: false, deviceId: device.id };
+    }
+
+    // Unknown device — require OTP verification
+    return { trusted: false, requiresOTP: true };
+}
+
+/**
+ * Send a device verification OTP to the user's email.
+ */
+export async function sendDeviceVerificationOTP(userId: string, email: string): Promise<{ success: boolean; error?: string; code?: string }> {
+    let userName = 'User';
+
+    // Get display name from profiles
+    const { data: profile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', userId)
+        .single();
+    userName = profile?.full_name || 'User';
+
+    if (!email) {
+        return { success: false, error: 'Could not determine user email' };
+    }
+
+    return sendDeviceOTP(userId, email, userName);
+}
+
+/**
+ * Verify OTP and register the device as trusted.
+ */
+export async function verifyDeviceAndRegister(
+    userId: string,
+    otpCode: string,
+    deviceHash: string,
+    deviceName: string,
+    ipAddress: string
+): Promise<{ success: boolean; error?: string }> {
+    // Verify the OTP
+    const otpResult = await verifyOTP(userId, otpCode);
+
+    if (!otpResult.valid) {
+        // Log failed attempt
+        await logDeviceSecurityEvent(userId, 'otp_failed', deviceHash, ipAddress, {
+            error: otpResult.error,
+            attemptsRemaining: otpResult.attemptsRemaining,
+        });
+        return { success: false, error: otpResult.error };
+    }
+
+    // OTP verified — register the device as trusted
+    const { error: insertError } = await supabase
+        .from('trusted_devices')
+        .upsert({
+            user_id: userId,
+            device_hash: deviceHash,
+            device_name: deviceName,
+            ip_first_seen: ipAddress,
+            first_seen: new Date().toISOString(),
+            last_seen: new Date().toISOString(),
+            trusted_status: true,
+            risk_flag: false,
+        }, { onConflict: 'user_id,device_hash' });
+
+    if (insertError) {
+        console.error('❌ Failed to register device:', insertError);
+        return { success: false, error: 'Failed to register device' };
+    }
+
+    // Run risk evaluation
+    const risk = await evaluateDeviceRisk(userId, deviceHash);
+    if (risk.riskFlag) {
+        await logDeviceSecurityEvent(userId, 'risk_flagged', deviceHash, ipAddress, {
+            riskScore: risk.riskScore,
+            checks: risk.checks,
+        });
+    }
+
+    // Log successful device registration
+    await logDeviceSecurityEvent(userId, 'device_registered', deviceHash, ipAddress, {
+        deviceName,
+        riskScore: risk.riskScore,
+    });
+
+    // Send new device notification email
+    const { data: authData } = await supabase.auth.getUser();
+    if (authData?.user?.email) {
+        await sendEmail({
+            to: authData.user.email,
+            subject: '🆕 New Device Added — Salaar Bank',
+            html: `
+                <div style="font-family: sans-serif; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; max-width: 500px;">
+                    <h2 style="color: #0f172a; margin: 0 0 15px;">New Device Trusted</h2>
+                    <p style="color: #475569;">A new device has been added to your trusted devices:</p>
+                    <div style="background: #f1f5f9; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                        <p style="margin: 0; font-weight: 600; color: #0f172a;">${deviceName}</p>
+                        <p style="margin: 5px 0 0; color: #64748b; font-size: 13px;">IP: ${ipAddress}</p>
+                        <p style="margin: 5px 0 0; color: #64748b; font-size: 13px;">${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>
+                    </div>
+                    <p style="color: #64748b; font-size: 13px;">If you didn't add this device, please remove it from your device management page immediately.</p>
+                </div>
+            `,
+        });
+    }
+
+    return { success: true };
+}
+
+/**
+ * Get all trusted devices for a user.
+ */
+export async function getUserDevices(userId: string): Promise<{
+    devices: any[];
+    error?: string;
+}> {
+    const { data, error } = await supabase
+        .from('trusted_devices')
+        .select('*')
+        .eq('user_id', userId)
+        .order('last_seen', { ascending: false });
+
+    if (error) {
+        return { devices: [], error: error.message };
+    }
+
+    return { devices: data || [] };
+}
+
+/**
+ * Remove a trusted device. Next login from that device will require OTP.
+ */
+export async function removeUserDevice(userId: string, deviceId: string): Promise<{
+    success: boolean;
+    error?: string;
+}> {
+    // Get device info for logging before deleting
+    const { data: device } = await supabase
+        .from('trusted_devices')
+        .select('*')
+        .eq('id', deviceId)
+        .eq('user_id', userId)
+        .single();
+
+    if (!device) {
+        return { success: false, error: 'Device not found' };
+    }
+
+    const { error } = await supabase
+        .from('trusted_devices')
+        .delete()
+        .eq('id', deviceId)
+        .eq('user_id', userId);
+
+    if (error) {
+        return { success: false, error: error.message };
+    }
+
+    // Log the removal
+    await logDeviceSecurityEvent(userId, 'device_removed', device.device_hash, device.ip_first_seen, {
+        deviceName: device.device_name,
+        removedAt: new Date().toISOString(),
+    });
+
+    // Send device removed notification
+    const { data: authData } = await supabase.auth.getUser();
+    if (authData?.user?.email) {
+        await sendEmail({
+            to: authData.user.email,
+            subject: '🗑️ Device Removed — Salaar Bank',
+            html: `
+                <div style="font-family: sans-serif; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; max-width: 500px;">
+                    <h2 style="color: #0f172a; margin: 0 0 15px;">Device Removed</h2>
+                    <p style="color: #475569;">The following device has been removed from your trusted devices:</p>
+                    <div style="background: #fef2f2; padding: 15px; border-radius: 8px; margin: 15px 0; border: 1px solid #fee2e2;">
+                        <p style="margin: 0; font-weight: 600; color: #0f172a;">${device.device_name}</p>
+                        <p style="margin: 5px 0 0; color: #64748b; font-size: 13px;">Removed at: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>
+                    </div>
+                    <p style="color: #64748b; font-size: 13px;">Next login from this device will require OTP verification.</p>
+                </div>
+            `,
+        });
+    }
+
+    return { success: true };
+}
+
+/**
+ * Get recent device security events for a user.
+ */
+export async function getDeviceSecurityEvents(userId: string, limit: number = 20): Promise<{
+    events: any[];
+    error?: string;
+}> {
+    const { data, error } = await supabase
+        .from('device_security_events')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+    if (error) {
+        return { events: [], error: error.message };
+    }
+
+    return { events: data || [] };
+}
+
+// ============================================
+// ANONYMITY / TOR DETECTION
+// ============================================
+
+import { checkAnonymityRisk, type AnonymityRiskResult } from '@/lib/security/anonymity-risk-engine';
+
+/**
+ * Check anonymity risk for a login attempt.
+ * Called from the login page after authentication, alongside device trust check.
+ */
+export async function checkAnonymity(
+    userId: string,
+    ip: string,
+    browserPrivacy: {
+        isTorBrowser: boolean;
+        canvasBlocked: boolean;
+        webglBlocked: boolean;
+        webrtcDisabled: boolean;
+        audioBlocked: boolean;
+        entropyScore: number;
+        privacyFlags: string[];
+    }
+): Promise<AnonymityRiskResult> {
+    return checkAnonymityRisk({
+        userId,
+        ip,
+        ...browserPrivacy,
+    });
+}

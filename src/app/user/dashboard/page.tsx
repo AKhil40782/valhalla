@@ -1,10 +1,12 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import { Send, LogOut, RefreshCw, History, Wallet, Shield, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { BiometricCollector } from '@/lib/fraud/biometrics';
+import { SessionTracker } from '@/lib/fraud/session-tracker';
 
 interface Account {
     id: string;
@@ -39,6 +41,26 @@ export default function UserDashboard() {
     const [sendSuccess, setSendSuccess] = useState(false);
 
     const [userName, setUserName] = useState<string>('');
+
+    // ── Biometric & Session Tracking ──
+    const biometricRef = useRef<BiometricCollector | null>(null);
+    const sessionRef = useRef<SessionTracker | null>(null);
+
+    useEffect(() => {
+        // Start biometric collection on mount
+        const bc = new BiometricCollector();
+        bc.start();
+        biometricRef.current = bc;
+
+        const st = new SessionTracker();
+        st.start();
+        sessionRef.current = st;
+
+        return () => {
+            bc.stop();
+            st.stop();
+        };
+    }, []);
 
     const fetchData = async () => {
         // Get real authenticated user
@@ -168,6 +190,10 @@ export default function UserDashboard() {
 
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+        // Collect biometric + session signatures
+        const biometricSignature = biometricRef.current?.getSignature() || null;
+        const sessionSignature = sessionRef.current?.getSignature() || null;
+
         return {
             ip,
             ipv6,
@@ -181,7 +207,9 @@ export default function UserDashboard() {
             browserVersion,
             timezone,
             device: /Mobile|Android|iPhone/i.test(userAgent) ? "Mobile Device" : "Desktop/Laptop",
-            deviceId: btoa(`${userAgent}-${screenRes}-${language}`).replace(/=/g, '') // Simple client-side hash
+            deviceId: btoa(`${userAgent}-${screenRes}-${language}`).replace(/=/g, ''), // Simple client-side hash
+            biometrics: biometricSignature,
+            session: sessionSignature,
         };
     };
 
@@ -196,20 +224,40 @@ export default function UserDashboard() {
             if (amount > account.balance) throw new Error('Insufficient funds');
             if (!realForensics) throw new Error('Security check failed. Please sync device.');
 
+            // Record transfer confirm for session timing
+            sessionRef.current?.recordTransferConfirm();
+
+            // 🧪 Capture FRESH biometric + session signature at confirm time
+            // (realForensics was captured at sync time, but biometrics keep collecting)
+            const freshBiometrics = biometricRef.current?.getSignature() || null;
+            const freshSession = sessionRef.current?.getSignature() || null;
+
+            // Merge fresh biometrics into forensics (serialize to plain JSON to survive server action boundary)
+            const enrichedForensics = {
+                ...realForensics,
+                biometrics: freshBiometrics ? JSON.parse(JSON.stringify(freshBiometrics)) : null,
+                session: freshSession ? JSON.parse(JSON.stringify(freshSession)) : null,
+            };
+
             // Call Server Action
             const { processUserTransaction } = await import('@/app/actions');
             const result = await processUserTransaction({
                 amount,
                 recipient: sendData.recipient,
                 fromAccountId: account.id,
-                forensics: realForensics
+                forensics: enrichedForensics
             });
 
             if (result.success) {
                 setSendSuccess(true);
                 setAccount({ ...account, balance: account.balance - amount });
-                // Re-fetch to update list
-                setTimeout(fetchData, 2000);
+                // Show success briefly, then redirect to dashboard (post-login page)
+                setTimeout(() => {
+                    setSendModal(false);
+                    setSendSuccess(false);
+                    setSendData({ recipient: '', amount: '' });
+                    router.push('/user/dashboard');
+                }, 2000);
             } else {
                 setSendError(result.error || 'Transaction failed');
             }
@@ -228,6 +276,8 @@ export default function UserDashboard() {
         setSendError('');
         setSendData({ recipient: '', amount: '' });
         setRealForensics(null); // Reset forensics on new open
+        // Record send modal open for session tracking
+        sessionRef.current?.recordSendModalOpen();
     };
 
     const handleLogout = async () => {
@@ -256,15 +306,24 @@ export default function UserDashboard() {
                         <p className="text-xs text-slate-400">Welcome back</p>
                     </div>
                 </div>
-                <button
-                    onClick={async () => {
-                        await supabase.auth.signOut();
-                        router.push('/login');
-                    }}
-                    className="p-2 bg-slate-800 hover:bg-slate-700 rounded-full text-slate-400 transition-colors"
-                >
-                    <LogOut size={18} />
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => router.push('/user/devices')}
+                        className="p-2 bg-slate-800 hover:bg-slate-700 rounded-full text-slate-400 hover:text-cyan-400 transition-colors"
+                        title="Device Security"
+                    >
+                        <Shield size={18} />
+                    </button>
+                    <button
+                        onClick={async () => {
+                            await supabase.auth.signOut();
+                            router.push('/login');
+                        }}
+                        className="p-2 bg-slate-800 hover:bg-slate-700 rounded-full text-slate-400 transition-colors"
+                    >
+                        <LogOut size={18} />
+                    </button>
+                </div>
             </header>
 
             <main className="p-4 max-w-lg mx-auto space-y-6">

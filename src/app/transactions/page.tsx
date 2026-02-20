@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { getRealFraudData } from '@/app/actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Search, Info, MapPin, Monitor, Smartphone, Globe, Hash } from 'lucide-react';
+import { Search, Info, MapPin, Monitor, Smartphone, Globe, Hash, Brain, Activity, AlertTriangle } from 'lucide-react';
 
 export default function TransactionsPage() {
     const [transactions, setTransactions] = useState<any[]>([]);
@@ -212,6 +212,111 @@ export default function TransactionsPage() {
                                             <div className="text-[10px] opacity-70">Automated Policy Check</div>
                                         </div>
                                     </div>
+
+                                    {/* 🧠 Behavioral Intelligence Panel */}
+                                    {selectedTx.details?.fraudScores && (
+                                        <div className="pt-4 border-t border-slate-800">
+                                            <div className="text-[10px] text-slate-500 uppercase font-bold text-center mb-4 tracking-widest flex items-center justify-center gap-2">
+                                                <Brain className="w-3.5 h-3.5 text-purple-400" />
+                                                Behavioral Intelligence
+                                            </div>
+
+                                            <div className="space-y-3">
+                                                {/* Biometric Score */}
+                                                {(() => {
+                                                    const bioScore = selectedTx.details.fraudScores.biometricScore || 0;
+                                                    const color = bioScore > 0.6 ? '#ef4444' : bioScore > 0.3 ? '#f97316' : '#10b981';
+                                                    const bgColor = bioScore > 0.6 ? 'rgba(239,68,68,0.06)' : bioScore > 0.3 ? 'rgba(249,115,22,0.06)' : 'rgba(16,185,129,0.06)';
+                                                    const borderColor = bioScore > 0.6 ? 'rgba(239,68,68,0.2)' : bioScore > 0.3 ? 'rgba(249,115,22,0.2)' : 'rgba(16,185,129,0.2)';
+                                                    return (
+                                                        <div className="rounded-lg p-3" style={{ background: bgColor, border: `1px solid ${borderColor}` }}>
+                                                            <div className="flex items-center justify-between mb-2">
+                                                                <div className="flex items-center gap-2">
+                                                                    <Brain className="w-3.5 h-3.5" style={{ color }} />
+                                                                    <span className="text-[10px] uppercase font-bold text-slate-400">Biometric Anomaly</span>
+                                                                </div>
+                                                                <span className="text-sm font-mono font-bold" style={{ color }}>
+                                                                    {(bioScore * 100).toFixed(0)}%
+                                                                </span>
+                                                            </div>
+                                                            <div className="w-full bg-slate-900 rounded-full h-1.5 mb-2">
+                                                                <div
+                                                                    className="h-1.5 rounded-full transition-all duration-700"
+                                                                    style={{ width: `${Math.max(bioScore * 100, 2)}%`, backgroundColor: color }}
+                                                                />
+                                                            </div>
+                                                            {selectedTx.details.fraudScores.biometricFlags?.length > 0 && (
+                                                                <div className="flex flex-wrap gap-1 mt-2">
+                                                                    {selectedTx.details.fraudScores.biometricFlags.map((flag: string, i: number) => (
+                                                                        <span key={i} className="text-[9px] px-1.5 py-0.5 rounded" style={{
+                                                                            backgroundColor: `${color}15`,
+                                                                            color: color,
+                                                                            border: `1px solid ${color}30`
+                                                                        }}>
+                                                                            {flag}
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()}
+
+                                                {/* Session Score */}
+                                                {(() => {
+                                                    const sessScore = selectedTx.details.fraudScores.sessionScore || 0;
+                                                    const color = sessScore > 0.6 ? '#ef4444' : sessScore > 0.3 ? '#f97316' : '#10b981';
+                                                    const bgColor = sessScore > 0.6 ? 'rgba(239,68,68,0.06)' : sessScore > 0.3 ? 'rgba(249,115,22,0.06)' : 'rgba(16,185,129,0.06)';
+                                                    const borderColor = sessScore > 0.6 ? 'rgba(239,68,68,0.2)' : sessScore > 0.3 ? 'rgba(249,115,22,0.2)' : 'rgba(16,185,129,0.2)';
+                                                    return (
+                                                        <div className="rounded-lg p-3" style={{ background: bgColor, border: `1px solid ${borderColor}` }}>
+                                                            <div className="flex items-center justify-between mb-2">
+                                                                <div className="flex items-center gap-2">
+                                                                    <Activity className="w-3.5 h-3.5" style={{ color }} />
+                                                                    <span className="text-[10px] uppercase font-bold text-slate-400">Session Anomaly</span>
+                                                                </div>
+                                                                <span className="text-sm font-mono font-bold" style={{ color }}>
+                                                                    {(sessScore * 100).toFixed(0)}%
+                                                                </span>
+                                                            </div>
+                                                            <div className="w-full bg-slate-900 rounded-full h-1.5 mb-2">
+                                                                <div
+                                                                    className="h-1.5 rounded-full transition-all duration-700"
+                                                                    style={{ width: `${Math.max(sessScore * 100, 2)}%`, backgroundColor: color }}
+                                                                />
+                                                            </div>
+                                                            {selectedTx.details.fraudScores.sessionFlags?.length > 0 && (
+                                                                <div className="flex flex-wrap gap-1 mt-2">
+                                                                    {selectedTx.details.fraudScores.sessionFlags.map((flag: string, i: number) => (
+                                                                        <span key={i} className="text-[9px] px-1.5 py-0.5 rounded" style={{
+                                                                            backgroundColor: `${color}15`,
+                                                                            color: color,
+                                                                            border: `1px solid ${color}30`
+                                                                        }}>
+                                                                            {flag}
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* No Behavioral Data Notice */}
+                                    {!selectedTx.details?.fraudScores && (
+                                        <div className="pt-4 border-t border-slate-800">
+                                            <div className="flex items-center gap-2 bg-slate-900/50 rounded-lg p-3 border border-slate-800/50">
+                                                <Brain className="w-4 h-4 text-slate-600" />
+                                                <div>
+                                                    <div className="text-[10px] text-slate-500 uppercase font-bold">Behavioral Analysis</div>
+                                                    <div className="text-[10px] text-slate-600">No behavioral data captured for this transaction</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             ) : (
                                 <div className="h-full flex flex-col items-center justify-center text-slate-600 text-center py-20">

@@ -33,31 +33,55 @@ function generateSyntheticTrainingData(count: number) {
         const isFraud = Math.random() < 0.1;
         y.push(isFraud ? 1 : 0);
 
-        // Feature Vector: [velocity, log_variance, burst, ip_ratio, device_ratio, vpn_ratio, density]
-
-        let velocity, variance, burst, ipRatio, deviceRatio, vpnRatio, density;
+        // Feature Vector (18-dim): [velocity, log_variance, burst, ip_ratio, device_ratio, vpn_ratio, density,
+        //   burst_window, sync_activity, funnel, circular, pass_thru, automation, physical,
+        //   biometric, session, amount_normalized, tx_count_normalized]
 
         if (isFraud) {
-            // FRAUD PATTERNS: High velocity, high burst, device recycling (low ratio), VPN usage
-            velocity = 0.5 + Math.random() * 0.5; // High (normalized)
-            variance = Math.random();             // Random
-            burst = 0.4 + Math.random() * 0.6;    // High
-            ipRatio = 0.1 + Math.random() * 0.4;  // Low (proxy recycling) or High (botnet)? Assume recycling here.
-            deviceRatio = 0.1 + Math.random() * 0.3; // Low (many accounts, 1 device)
-            vpnRatio = 0.5 + Math.random() * 0.5; // High
-            density = 0.5 + Math.random() * 0.5;  // High connectivity
+            // FRAUD PATTERNS
+            X.push([
+                0.5 + Math.random() * 0.5,   // velocity — high
+                Math.random(),                 // variance — random
+                0.4 + Math.random() * 0.6,    // burst — high
+                0.1 + Math.random() * 0.4,    // ip_ratio — low (recycling)
+                0.1 + Math.random() * 0.3,    // device_ratio — low (reuse)
+                0.5 + Math.random() * 0.5,    // vpn_ratio — high
+                0.5 + Math.random() * 0.5,    // density — high
+                0.3 + Math.random() * 0.7,    // burst_window — moderate to high
+                0.2 + Math.random() * 0.8,    // sync_activity — moderate to high
+                0.3 + Math.random() * 0.7,    // funnel — moderate to high
+                0.2 + Math.random() * 0.8,    // circular — moderate to high
+                0.3 + Math.random() * 0.7,    // pass_thru — moderate to high
+                0.4 + Math.random() * 0.6,    // automation — high
+                0.2 + Math.random() * 0.8,    // physical — moderate to high
+                0.3 + Math.random() * 0.7,    // biometric — moderate to high
+                0.3 + Math.random() * 0.7,    // session — moderate to high
+                Math.random(),                 // amount — random
+                0.3 + Math.random() * 0.7,    // tx_count — moderate to high
+            ]);
         } else {
             // NORMAL PATTERNS
-            velocity = Math.random() * 0.2;       // Low
-            variance = Math.random();
-            burst = Math.random() * 0.2;          // Low
-            ipRatio = 0.8 + Math.random() * 0.2;  // High (1 IP per user usually)
-            deviceRatio = 0.8 + Math.random() * 0.2; // High
-            vpnRatio = Math.random() * 0.1;       // Low
-            density = Math.random() * 0.3;        // Low
+            X.push([
+                Math.random() * 0.2,          // velocity — low
+                Math.random(),                 // variance — random
+                Math.random() * 0.2,          // burst — low
+                0.8 + Math.random() * 0.2,    // ip_ratio — high (unique)
+                0.8 + Math.random() * 0.2,    // device_ratio — high
+                Math.random() * 0.1,          // vpn_ratio — low
+                Math.random() * 0.3,          // density — low
+                Math.random() * 0.15,         // burst_window — very low
+                Math.random() * 0.1,          // sync_activity — very low
+                Math.random() * 0.1,          // funnel — very low
+                Math.random() * 0.05,         // circular — near zero
+                Math.random() * 0.1,          // pass_thru — very low
+                Math.random() * 0.1,          // automation — very low
+                Math.random() * 0.1,          // physical — very low
+                Math.random() * 0.15,         // biometric — low
+                Math.random() * 0.15,         // session — low
+                Math.random(),                 // amount — random
+                Math.random() * 0.3,          // tx_count — low
+            ]);
         }
-
-        X.push([velocity, variance, burst, ipRatio, deviceRatio, vpnRatio, density]);
     }
 
     return { X, y };
@@ -144,12 +168,24 @@ export async function predictClusterRisk(features: ClusterFeatures) {
     if (rfScore > 0.5) explanations.push("ML Classifier detected fraud patterns");
     if (anomalyScore > 0.6) explanations.push("High behavioral anomaly detected");
 
-    // Feature contributions (naive)
-    const [vel, , burst, ipR, devR, vpn, dens] = vector;
+    // Feature contributions (expanded 18-dim)
+    const [vel, , burst, ipR, devR, vpn, dens,
+        burstW, syncAct, funnel, circular, passThru, auto, physical,
+        bio, sess] = vector;
     if (vel > 0.4) explanations.push("High Transaction Velocity");
     if (burst > 0.4) explanations.push("Abnormal Burst Rate");
     if (devR < 0.3) explanations.push("High Device Reuse");
     if (vpn > 0.5) explanations.push("Suspicious VPN Usage");
+    // New category signals
+    if (burstW > 0.3) explanations.push("Temporal Burst Window Detected");
+    if (syncAct > 0.3) explanations.push("Synchronized Cross-Account Activity");
+    if (funnel > 0.3) explanations.push("Money Funnel Pattern");
+    if (circular > 0.3) explanations.push("Circular Fund Flow");
+    if (passThru > 0.3) explanations.push("Rapid Pass-Through Account");
+    if (auto > 0.3) explanations.push("Automation/Script Indicators");
+    if (physical > 0.3) explanations.push("Physical Location Conflict");
+    if (bio > 0.3) explanations.push("Behavioral Biometric Anomaly");
+    if (sess > 0.3) explanations.push("Unusual Session Pattern");
 
     return {
         supervisedRisk: rfScore,
