@@ -26,7 +26,8 @@ ADD COLUMN IF NOT EXISTS cluster_id text,
 ADD COLUMN IF NOT EXISTS alert_type text,
 ADD COLUMN IF NOT EXISTS linked_accounts text[],
 ADD COLUMN IF NOT EXISTS assigned_to text,
-ADD COLUMN IF NOT EXISTS resolved_at timestamp with time zone;
+ADD COLUMN IF NOT EXISTS resolved_at timestamp with time zone,
+ADD COLUMN IF NOT EXISTS feedback_status text;
 
 -- 4. Add new columns to INVESTIGATION_CASES table
 ALTER TABLE investigation_cases
