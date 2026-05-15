@@ -55,6 +55,7 @@ create table public.fraud_alerts (
   risk_score int,
   alert_type text,
   status text default 'open',
+  feedback_status text,
   created_at timestamptz default now()
 );
 
