@@ -49,6 +49,7 @@ create table fraud_alerts (
   linked_accounts text[], -- Array of linked account IDs
   status text default 'NEW', -- NEW, INVESTIGATING, CLOSED, FALSE_POSITIVE
   assigned_to text,
+  feedback_status text, -- Correct, False Positive
   created_at timestamp with time zone default now(),
   resolved_at timestamp with time zone
 );
