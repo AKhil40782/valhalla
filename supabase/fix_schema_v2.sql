@@ -27,6 +27,7 @@ ALTER TABLE fraud_alerts ADD COLUMN IF NOT EXISTS alert_type text;
 ALTER TABLE fraud_alerts ADD COLUMN IF NOT EXISTS linked_accounts text[];
 ALTER TABLE fraud_alerts ADD COLUMN IF NOT EXISTS assigned_to text;
 ALTER TABLE fraud_alerts ADD COLUMN IF NOT EXISTS resolved_at timestamp with time zone;
+ALTER TABLE fraud_alerts ADD COLUMN IF NOT EXISTS feedback_status text;
 -- Fix enum constraint for risk_level if needed, or just let text be text if check constraint fails
 DO $$ BEGIN
     ALTER TABLE fraud_alerts DROP CONSTRAINT IF EXISTS fraud_alerts_risk_level_check;
